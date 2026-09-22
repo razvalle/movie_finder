@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Movie Finder — by Mood &amp; Description</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+
+  <header class="site-header">
+    <h1>Movie Finder</h1>
+    <p>Search by description or browse movies by genre.</p>
+  </header>
+
+  <main class="stage">
+
+    <section class="search" aria-label="Movie search">
+      <form class="search__form" action="{{ url_for('index') }}" method="get">
+        <label class="search__label" for="q">Find a movie</label>
+        <div class="search__row">
+          <textarea
+            id="q"
+            name="q"
+            class="search__input"
+            rows="2"
+            placeholder="e.g. I want something suspenseful but not horror, preferably a mystery under two hours."
+          >{{ query }}</textarea>
+          <button class="search__button" type="submit">Find Movies</button>
+        </div>
+        <div class="filter-row">
+          <label for="genre">Genre</label>
+          <select id="genre" name="genre" class="genre-filter">
+            <option value="">All genres</option>
+            {% for genre in genres %}
+              <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %}>{{ genre|title }}</option>
+            {% endfor %}
+          </select>
+          <label for="nationality">Origin</label>
+          <select id="nationality" name="nationality" class="genre-filter">
+            <option value="">All origins</option>
+            {% for nationality in nationalities %}
+              <option value="{{ nationality }}" {% if selected_nationality == nationality %}selected{% endif %}>{{ nationality_labels.get(nationality, nationality) }}</option>
+            {% endfor %}
+          </select>
+          <label for="per_page">Per page</label>
+          <select id="per_page" name="per_page" class="genre-filter">
+            {% for option in per_page_options %}
+              <option value="{{ option }}" {% if per_page == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+          <button class="clear-filter" type="submit" name="q" value="">Show Movies</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="results" aria-label="Movies">
+        <div class="results__header">
+          <h2 class="section-title">{{ 'Recommended Movies' if searched else 'All Movies' }}</h2>
+          <span class="results__count">{{ result_count }} match{{ '' if result_count == 1 else 'es' }}</span>
+        </div>
+
+        {% if searched and results %}
+          <div class="results__list">
+            {% for r in results %}
+              <article class="movie-card">
+                <div class="movie-card__poster">
+                  {% if r.poster_exists %}
+                    <img src="{{ url_for('static', filename='images/' ~ r.movie.id ~ '.jpg') }}" alt="Poster for {{ r.movie.title }}" />
+                  {% else %}
+                    <span>Poster<br /><small>Add {{ r.movie.id }}.jpg</small></span>
+                  {% endif %}
+                </div>
+                <div>
+                  <div class="movie-card__rank">#{{ r.rank }}</div>
+                  <h3 class="movie-card__title">{{ r.movie.title }}</h3>
+                  <div class="movie-card__meta">{{ r.genres_display }} · {{ r.movie.runtime }} min · {{ r.movie.release_year }}</div>
+                  <p class="movie-card__synopsis">{{ r.movie.synopsis }}</p>
+                  <ul class="movie-card__reasons">
+                    {% for reason in r.reasons %}
+                      <li>
+                        <span class="reason-icon {{ 'reason-icon--ok' if reason.ok else 'reason-icon--miss' }}">{{ '✓' if reason.ok else '✗' }}</span>
+                        <span class="{{ 'reason-text--ok' if reason.ok else 'reason-text--miss' }}">{{ reason.text }}</span>
+                      </li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+        {% elif not searched and movies %}
+          <div class="results__list">
+            {% for item in movies %}
+              {% set movie = item.movie %}
+              <article class="movie-card movie-card--browse">
+                <div class="movie-card__poster">
+                  {% if item.poster_exists %}
+                    <img src="{{ url_for('static', filename='images/' ~ movie.id ~ '.jpg') }}" alt="Poster for {{ movie.title }}" />
+                  {% else %}
+                    <span>Poster<br /><small>Add {{ movie.id }}.jpg</small></span>
+                  {% endif %}
+                </div>
+                <div class="movie-card__content">
+                  <h3 class="movie-card__title">{{ movie.title }}</h3>
+                  <div class="movie-card__meta">{{ movie.genres | map('title') | join(', ') }} · {{ movie.runtime }} min · {{ movie.release_year }} · {{ movie.nationality or 'Unknown origin' }}</div>
+                  <p class="movie-card__synopsis">{{ movie.synopsis }}</p>
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty-state">
+            <strong>No movies found.</strong>
+            Try a different search or choose another genre.
+          </div>
+        {% endif %}
+        {% if total_pages > 1 %}
+          <nav class="pagination" aria-label="Movie pages">
+            {% if page_number > 1 %}
+              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, per_page=per_page, page=page_number - 1) }}">Previous</a>
+            {% endif %}
+            <span>Page {{ page_number }} of {{ total_pages }}</span>
+            {% if page_number < total_pages %}
+              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, per_page=per_page, page=page_number + 1) }}">Next</a>
+            {% endif %}
+          </nav>
+        {% endif %}
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <p>Rule-based NLP, written in pure Python — no pretrained language model is used for matching. Every score is explainable.</p>
+  </footer>
+
+</body>
+</html>

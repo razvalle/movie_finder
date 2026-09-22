@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv-1/
+
+# Local generated indexes and catalogs
+data/imdb/
+data/imdb_movies.json
+data/tfidf_cache.pkl
+data/imdb_movies.tmdb_progress.json
+
+# Local poster assets and generated reports
+static/images/*
+!static/images/.gitkeep
+tests/test_report.md
+
+# Local editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
