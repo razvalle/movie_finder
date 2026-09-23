@@ -154,12 +154,12 @@ def main():
 
         lines.append(
             f'| {r["id"]} | {r["difficulty"]} | {r["input"].replace("|", chr(92) + "|")} | {summary} | '
-            f'{r["top_result"]} | {"✅ Pass" if r["pass"] else "❌ Fail"} | '
+            f'{r["top_result"]} | {"PASS" if r["pass"] else "FAIL"} | '
             f'{"; ".join(r["failures"]) or "—"} | {r["improvement"] or "—"} |'
         )
 
     report_path = os.path.join(os.path.dirname(__file__), "test_report.md")
-    with open(report_path, "w") as f:
+    with open(report_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print(f"Full report written to {report_path}")
 
