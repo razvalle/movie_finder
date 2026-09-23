@@ -24,6 +24,7 @@ STOPWORDS = {
     "people", "person", "character", "characters", "story", "stories",
     "with", "from", "into", "through", "around", "someone", "something",
     "want", "watch", "watching", "recommend", "recommendation",
+    "called", "named", "titled",
     "film", "films", "get", "got", "have", "has", "had", "am", "are", "do",
     # Common Taglish filler particles, so keyword bags stay clean for
     # mixed English/Tagalog queries too.

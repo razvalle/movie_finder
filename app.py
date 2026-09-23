@@ -40,9 +40,13 @@ CATALOG_PATH = Path(__file__).parent / "data" / "imdb_movies.json"
 TFIDF_CACHE_PATH = Path(__file__).parent / "data" / "tfidf_cache.pkl"
 TFIDF_MODEL = load_or_build_tfidf_model(MOVIES, TFIDF_CACHE_PATH, CATALOG_PATH)
 TITLE_INDEX = {}
+TITLE_TOKEN_INDEX = {}
 for movie in MOVIES:
     normalized_title = normalize_text(movie["title"]).replace(",", " ").strip()
     TITLE_INDEX.setdefault(normalized_title, []).append(movie)
+    for token in set(normalized_title.split()):
+        if len(token) >= 4:
+            TITLE_TOKEN_INDEX.setdefault(token, []).append(movie)
 
 EXAMPLE_QUERIES = [
     "I want something suspenseful but not horror, preferably a mystery under two hours.",
@@ -134,6 +138,11 @@ def movie_rank_key(movie):
     return (movie.get("average_rating") or 0, movie.get("vote_count", 0), movie.get("release_year", 0))
 
 
+def movie_country_codes(movie):
+    """Use TMDB production countries when enriched, otherwise IMDb listing regions."""
+    return movie.get("production_countries") or movie.get("origin_regions", [movie.get("nationality")])
+
+
 def find_title_matches(query, movies):
     """Find titles written exactly or as a phrase inside a natural-language query."""
     normalized_query = normalize_text(query).replace(",", " ")
@@ -141,13 +150,39 @@ def find_title_matches(query, movies):
     if exact_matches:
         allowed_ids = {movie["id"] for movie in movies}
         return [movie for movie in exact_matches if movie["id"] in allowed_ids]
+    query_tokens = [token for token in normalized_query.split() if len(token) >= 4]
+    candidate_lists = [TITLE_TOKEN_INDEX[token] for token in query_tokens if token in TITLE_TOKEN_INDEX]
+    if not candidate_lists:
+        return []
+    candidates = min(candidate_lists, key=len)
+    allowed_ids = {movie["id"] for movie in movies}
     matches = []
-    for movie in movies:
+    for movie in candidates:
+        if movie["id"] not in allowed_ids:
+            continue
         normalized_title = normalize_text(movie["title"]).replace(",", " ")
         title_pattern = rf"(?<![a-z0-9]){re.escape(normalized_title)}(?![a-z0-9])"
         if re.search(title_pattern, normalized_query):
             matches.append(movie)
-    return matches
+    if not matches:
+        return []
+    longest_title_length = max(
+        len(normalize_text(movie["title"]).replace(",", " ").split())
+        for movie in matches
+    )
+    return [
+        movie for movie in matches
+        if len(normalize_text(movie["title"]).replace(",", " ").split()) == longest_title_length
+    ]
+
+
+def remove_title_text(query, title_matches):
+    """Remove a detected title so its words cannot become search preferences."""
+    normalized = normalize_text(query).replace(",", " ")
+    for movie in title_matches:
+        title = normalize_text(movie["title"]).replace(",", " ").strip()
+        normalized = re.sub(rf"(?<![a-z0-9]){re.escape(title)}(?![a-z0-9])", " ", normalized)
+    return " ".join(normalized.split())
 
 
 def is_exact_title_query(query, title_matches):
@@ -214,8 +249,23 @@ def index():
     selected_nationality = request.args.get("nationality", "").strip().upper()
     detected_nationality = detect_nationality(query) if query else ""
     effective_nationality = detected_nationality or selected_nationality
-    preference_query = remove_nationality_text(query, detected_nationality) if detected_nationality else query
+    nationality_query = remove_nationality_text(query, detected_nationality) if detected_nationality else query
+    query_title_matches = find_title_matches(nationality_query, MOVIES) if query else []
+    preference_query = remove_title_text(nationality_query, query_title_matches)
     query_preferences = extract_preferences(preference_query) if query else None
+    specific_title_matches = [
+        movie for movie in query_title_matches
+        if normalize_text(movie["title"]).strip() not in {"movie", "movies", "film", "films"}
+    ]
+    title_only_intent = specific_title_matches and not any((
+        query_preferences["genres"], query_preferences["moods"], query_preferences["themes"],
+        query_preferences["free_text_keywords"], query_preferences["runtime"]["min"],
+        query_preferences["runtime"]["max"], query_preferences["runtime"]["target"],
+        query_preferences["release_year"],
+    ))
+    if title_only_intent:
+        selected_genre = ""
+        effective_nationality = ""
     if detected_nationality and query_preferences and not query_preferences["genres"]:
         selected_genre = ""
     try:
@@ -229,11 +279,13 @@ def index():
     except ValueError:
         page_number = 1
     genres = sorted({genre for movie in MOVIES for genre in movie["genres"]})
-    nationalities = sorted({movie.get("nationality") for movie in MOVIES if movie.get("nationality")})
+    nationalities = sorted({
+        code for movie in MOVIES for code in movie_country_codes(movie) if code
+    })
     filtered_movies = [
         movie for movie in MOVIES
         if (not selected_genre or selected_genre in movie["genres"])
-        and (not effective_nationality or effective_nationality in movie.get("origin_regions", [movie.get("nationality")]))
+        and (not effective_nationality or effective_nationality in movie_country_codes(movie))
     ]
 
     context = {
@@ -266,13 +318,16 @@ def index():
             )
         normalized_query = normalize_text(query).replace(",", " ").strip()
         exact_title_exists = normalized_query in TITLE_INDEX
-        nationality_only = detected_nationality and not exact_title_exists and not any((
+        nationality_only = detected_nationality and not title_only_intent and not exact_title_exists and not any((
             preferences["genres"], preferences["moods"], preferences["themes"],
             preferences["free_text_keywords"], preferences["runtime"]["min"],
             preferences["runtime"]["max"], preferences["runtime"]["target"],
             preferences["release_year"],
         ))
-        title_matches = [] if nationality_only else find_title_matches(query, filtered_movies)
+        if nationality_only:
+            title_matches = []
+        else:
+            title_matches = [movie for movie in query_title_matches if movie in filtered_movies]
         search_movies = title_matches or filtered_movies
         ranking_preferences = preferences
         if title_matches and is_exact_title_query(query, title_matches):

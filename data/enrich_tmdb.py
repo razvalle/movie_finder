@@ -74,6 +74,14 @@ def enrich_catalog():
                 poster_path = result.get("poster_path")
                 if poster_path:
                     movie["poster_path"] = poster_path
+                production_countries = [
+                    country["iso_3166_1"]
+                    for country in result.get("production_countries", [])
+                    if country.get("iso_3166_1")
+                ]
+                if production_countries:
+                    movie["production_countries"] = production_countries
+                    movie["country_source"] = "TMDB production country"
             time.sleep(REQUEST_DELAY_SECONDS)
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError):
             failed += 1

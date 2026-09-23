@@ -36,7 +36,7 @@
               <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %}>{{ genre|title }}</option>
             {% endfor %}
           </select>
-          <label for="nationality">Origin</label>
+          <label for="nationality">Country / IMDb region</label>
           <select id="nationality" name="nationality" class="genre-filter">
             <option value="">All origins</option>
             {% for nationality in nationalities %}
@@ -102,7 +102,7 @@
                 </div>
                 <div class="movie-card__content">
                   <h3 class="movie-card__title">{{ movie.title }}</h3>
-                  <div class="movie-card__meta">{{ movie.genres | map('title') | join(', ') }} · {{ movie.runtime }} min · {{ movie.release_year }} · {{ movie.nationality or 'Unknown origin' }}</div>
+                  <div class="movie-card__meta">{{ movie.genres | map('title') | join(', ') }} · {{ movie.runtime }} min · {{ movie.release_year }} · {{ nationality_labels.get((movie.production_countries or movie.origin_regions or [movie.nationality])[0], movie.nationality or 'Unknown') }}</div>
                   <p class="movie-card__synopsis">{{ movie.synopsis }}</p>
                 </div>
               </article>
