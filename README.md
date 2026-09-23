@@ -91,6 +91,41 @@ result, pass/fail, reason for failure, and a suggested improvement.
 Current result: **22/23 passing**. The one documented failure (`V1`) is
 a known limitation — see "Known limitations" below.
 
+### Structured search regression tests
+
+```powershell
+python tests/test_structured_query.py
+python tests/test_app_routes.py
+```
+
+The first command checks country aliases, ranking intent, genre aliases,
+dates, negative filters, people/language extraction, and semantic-text
+separation. The second checks Flask behavior for titles, stale UI filters,
+country/genre conflicts, descriptions, typos, and unknown text.
+
+## Structured query pipeline
+
+The application interprets each query using this local rule-based pipeline:
+
+```
+raw query -> normalization -> country/ranking aliases -> title detection
+-> explicit genre/mood/theme/date/negative filters -> semantic residual
+-> database filtering -> TF-IDF similarity -> weighted ranking -> pagination
+```
+
+`nlp/query.py` owns canonical country aliases (including `PH`, `Pinoy`, and
+`Pinas`), ranking words (`best`, `top`, `highest rated`, `popular`), genre
+aliases, and debug output. Explicit constraints are removed before TF-IDF so
+words such as `best`, country names, and `2020` cannot create keyword matches.
+The server logs the parsed structure for each request.
+
+The IMDb bulk catalog includes title, year, genre, runtime, ratings, votes,
+and listed regions. It does not contain cast, crew, language, or real plots.
+Those entities are parsed and logged but can only become hard filters after
+TMDB enrichment supplies the corresponding metadata. The UI labels fallback
+IMDb regions honestly; TMDB production-country data takes precedence when it
+has been imported.
+
 ## Project structure
 
 ```

@@ -46,6 +46,12 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b'value="CV" selected', response.data)
         self.assertNotIn(b'value="IN" selected', response.data)
 
+    def test_query_genre_overrides_stale_dropdown(self):
+        response = self.client.get("/?q=japanese+horror+movies&genre=action&per_page=12")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"The genre in your search overrides", response.data)
+        self.assertNotIn(b'value="action" selected', response.data)
+
     def test_country_genre_and_human_input_routes(self):
         cases = [
             ("/?q=japanese+horror+movies&genre=action&nationality=IN&per_page=12", b'value="JP" selected'),

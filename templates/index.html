@@ -52,6 +52,9 @@
           <button class="clear-filter" type="submit" name="q" value="">Show Movies</button>
         </div>
       </form>
+      {% for conflict in filter_conflicts %}
+        <p class="filter-conflict">{{ conflict }}</p>
+      {% endfor %}
     </section>
 
     <section class="results" aria-label="Movies">

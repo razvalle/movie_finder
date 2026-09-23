@@ -19,6 +19,11 @@ CURRENT_YEAR = date.today().year
 
 
 def extract_release_year_constraint(normalized_text):
+    match = re.search(r"\b(19\d{2}|20\d{2})\s*(?:-|to|through|until)\s*(19\d{2}|20\d{2})\b", normalized_text)
+    if match:
+        start, end = sorted((int(match.group(1)), int(match.group(2))))
+        return {"min": start, "max": end}
+
     match = re.search(r"from the (\d{2}|\d{4})s", normalized_text)
     if match:
         decade = int(match.group(1))
@@ -34,6 +39,11 @@ def extract_release_year_constraint(normalized_text):
     if match:
         offset = 0 if match.group(1) == "since" else 1
         return {"min": int(match.group(2)) + offset, "max": None}
+
+    match = re.search(r"\b(19\d{2}|20\d{2})\b", normalized_text)
+    if match:
+        year = int(match.group(1))
+        return {"min": year, "max": year}
 
     if re.search(r"\b(recent|new release|newer|modern)\b", normalized_text):
         return {"min": CURRENT_YEAR - 6, "max": None}

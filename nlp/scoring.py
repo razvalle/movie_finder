@@ -155,6 +155,8 @@ def rank_movies(movies, preferences, tfidf_model):
     """
     excluded_count = 0
     scored = []
+    mood_metadata_available = any(movie.get("mood_tags") for movie in movies)
+    theme_metadata_available = any(movie.get("themes") for movie in movies)
     query_vector = vectorize_query(preferences["free_text_keywords"], tfidf_model["idf"])
     query_norm = vector_norm(query_vector) if query_vector else 0.0
 
@@ -171,8 +173,14 @@ def rank_movies(movies, preferences, tfidf_model):
         if preferences["genres"] and not genre_matches:
             excluded_count += 1
             continue
-        if not preferences["genres"] and (preferences["moods"] or preferences["themes"]):
-            if not (mood_matches or theme_matches):
+        available_mood_match = mood_matches if mood_metadata_available else False
+        available_theme_match = theme_matches if theme_metadata_available else False
+        has_available_descriptive_filter = (
+            (preferences["moods"] and mood_metadata_available)
+            or (preferences["themes"] and theme_metadata_available)
+        )
+        if not preferences["genres"] and has_available_descriptive_filter:
+            if not (available_mood_match or available_theme_match):
                 excluded_count += 1
                 continue
         if is_excluded(movie, preferences):

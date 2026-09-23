@@ -467,6 +467,7 @@ body { background: var(--ink-950); color: var(--paper-100); }
 .filter-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.75rem; color: var(--paper-200); font-size: 0.9rem; }
 .genre-filter { padding: 0.55rem 2rem 0.55rem 0.65rem; font: inherit; }
 .clear-filter { border: 0; padding: 0.58rem 0.8rem; cursor: pointer; font: inherit; }
+.filter-conflict { margin: 0.7rem 0 0; color: var(--bad-red); font-size: 0.85rem; }
 .preferences, .movie-card, .empty-state { background: var(--ink-900); border: 1px solid var(--ink-700); border-radius: 4px; }
 .preferences { padding: 1rem; }
 .movie-card { border-radius: 4px; padding: 1rem; }

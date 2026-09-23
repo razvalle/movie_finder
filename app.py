@@ -20,6 +20,7 @@ or:
 import re
 import math
 import heapq
+import logging
 from pathlib import Path
 import pycountry
 
@@ -28,11 +29,15 @@ from flask import Flask, render_template, request
 from data.movies import MOVIES
 from nlp.extract import extract_preferences
 from nlp.normalize import normalize_text
+from nlp.query import build_structured_query, detect_country
 from nlp.tfidf import load_or_build_tfidf_model
 from nlp.scoring import rank_movies
 from nlp.explain import explain_match, title_case
 
 app = Flask(__name__)
+app.logger.setLevel(logging.INFO)
+QUERY_LOGGER = logging.getLogger("movie_finder.query")
+QUERY_LOGGER.setLevel(logging.INFO)
 
 # Built once at startup -- rebuilding per-request would be wasteful
 # since the movie corpus doesn't change while the server is running.
@@ -90,14 +95,7 @@ COUNTRY_PHRASES = {
 
 
 def detect_nationality(query):
-    normalized = normalize_text(query).replace(",", " ").strip()
-    for phrase, code in sorted(COUNTRY_PHRASES.items(), key=lambda item: len(item[0]), reverse=True):
-        if re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", normalized):
-            return code
-    for phrase, code in sorted(NATIONALITY_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
-        if re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", normalized):
-            return code
-    return ""
+    return detect_country(normalize_text(query).replace(",", " ").strip())[0]
 
 
 def remove_nationality_text(query, code):
@@ -138,6 +136,16 @@ def movie_rank_key(movie):
     return (movie.get("average_rating") or 0, movie.get("vote_count", 0), movie.get("release_year", 0))
 
 
+def ranking_key(entry, ranking_intent):
+    movie = entry["movie"]
+    rating = movie.get("average_rating") or 0
+    votes = movie.get("vote_count") or 0
+    year = movie.get("release_year") or 0
+    if ranking_intent == "popular":
+        return (entry["percent"], votes, rating, year)
+    return (entry["percent"], rating, votes, year)
+
+
 def movie_country_codes(movie):
     """Use TMDB production countries when enriched, otherwise IMDb listing regions."""
     return movie.get("production_countries") or movie.get("origin_regions", [movie.get("nationality")])
@@ -162,7 +170,11 @@ def find_title_matches(query, movies):
             continue
         normalized_title = normalize_text(movie["title"]).replace(",", " ")
         title_pattern = rf"(?<![a-z0-9]){re.escape(normalized_title)}(?![a-z0-9])"
-        if re.search(title_pattern, normalized_query):
+        title_words = normalized_title.split()
+        explicitly_named = re.search(rf"\b(?:called|named|titled)\s+{re.escape(normalized_title)}\b", normalized_query)
+        if len(title_words) >= 2 and re.search(title_pattern, normalized_query):
+            matches.append(movie)
+        elif len(title_words) == 1 and explicitly_named:
             matches.append(movie)
     if not matches:
         return []
@@ -247,12 +259,21 @@ def index():
     query = request.args.get("q", "").strip()
     selected_genre = request.args.get("genre", "").strip().lower()
     selected_nationality = request.args.get("nationality", "").strip().upper()
-    detected_nationality = detect_nationality(query) if query else ""
+    initial_query = build_structured_query(query) if query else None
+    detected_nationality = initial_query["country"] if initial_query else ""
+    filter_conflicts = []
+    if selected_nationality and detected_nationality and selected_nationality != detected_nationality:
+        filter_conflicts.append("The country in your search overrides the country menu selection.")
     effective_nationality = detected_nationality or selected_nationality
-    nationality_query = remove_nationality_text(query, detected_nationality) if detected_nationality else query
+    nationality_query = initial_query["cleaned_text"] if initial_query else query
     query_title_matches = find_title_matches(nationality_query, MOVIES) if query else []
     preference_query = remove_title_text(nationality_query, query_title_matches)
-    query_preferences = extract_preferences(preference_query) if query else None
+    query_analysis = build_structured_query(query, preference_query) if query else None
+    query_preferences = query_analysis["preferences"] if query_analysis else None
+    if query_preferences and query_preferences["genres"]:
+        if selected_genre and selected_genre not in query_preferences["genres"]:
+            filter_conflicts.append("The genre in your search overrides the genre menu selection.")
+        selected_genre = ""
     specific_title_matches = [
         movie for movie in query_title_matches
         if normalize_text(movie["title"]).strip() not in {"movie", "movies", "film", "films"}
@@ -293,6 +314,7 @@ def index():
         "selected_genre": selected_genre,
         "selected_nationality": effective_nationality,
         "detected_nationality": detected_nationality,
+        "filter_conflicts": filter_conflicts,
         "nationality_label": COUNTRY_LABELS.get(effective_nationality, effective_nationality),
         "genres": genres,
         "nationalities": nationalities,
@@ -307,16 +329,13 @@ def index():
         "movies": [],
         "searched": False,
         "result_count": len(filtered_movies),
+        "query_debug": query_analysis["debug"] if query_analysis else {},
     }
 
     if query:
         preferences = query_preferences
-        if detected_nationality:
-            preferences = dict(preferences)
-            preferences["free_text_keywords"] = remove_nationality_words(
-                preferences["free_text_keywords"], query, detected_nationality
-            )
-        normalized_query = normalize_text(query).replace(",", " ").strip()
+        QUERY_LOGGER.info("interpreted_query=%s", query_analysis["debug"])
+        normalized_query = normalize_text(nationality_query).replace(",", " ").strip()
         exact_title_exists = normalized_query in TITLE_INDEX
         nationality_only = detected_nationality and not title_only_intent and not exact_title_exists and not any((
             preferences["genres"], preferences["moods"], preferences["themes"],
@@ -339,13 +358,8 @@ def index():
             ranking_preferences["themes"] = []
         ranking = rank_movies(search_movies, ranking_preferences, TFIDF_MODEL)
         all_results = ranking["results"]
-        if detected_nationality and not any((
-            ranking_preferences["genres"], ranking_preferences["moods"],
-            ranking_preferences["themes"], ranking_preferences["free_text_keywords"],
-            ranking_preferences["runtime"]["min"], ranking_preferences["runtime"]["max"],
-            ranking_preferences["runtime"]["target"], ranking_preferences["release_year"],
-        )):
-            all_results.sort(key=lambda entry: movie_rank_key(entry["movie"]), reverse=True)
+        if query_analysis["ranking_intent"]:
+            all_results.sort(key=lambda entry: ranking_key(entry, query_analysis["ranking_intent"]), reverse=True)
         total_pages = max(1, math.ceil(len(all_results) / per_page))
         page_number = min(page_number, total_pages)
         start = (page_number - 1) * per_page
