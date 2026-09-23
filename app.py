@@ -74,7 +74,7 @@ def country_labels():
     labels = {}
     for country in pycountry.countries:
         labels[country.alpha_2] = country.name
-    labels.update({"XK": "Kosovo", "SU": "Soviet Union"})
+    labels.update({"CV": "Cabo Verde", "XK": "Kosovo", "SU": "Soviet Union"})
     return labels
 
 
@@ -90,6 +90,21 @@ def detect_nationality(query):
         if re.search(rf"(?<![a-z]){re.escape(name.lower())}(?![a-z])", normalized):
             return code
     return ""
+
+
+def remove_nationality_text(query, code):
+    """Remove the detected country phrase before local NLP preference parsing."""
+    normalized = normalize_text(query).replace(",", " ")
+    phrases = [
+        phrase for phrase, alias_code in NATIONALITY_ALIASES.items()
+        if alias_code == code
+    ]
+    country_name = COUNTRY_LABELS.get(code, "").lower()
+    if country_name:
+        phrases.append(country_name)
+    for phrase in sorted(phrases, key=len, reverse=True):
+        normalized = re.sub(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", " ", normalized)
+    return " ".join(normalized.split())
 
 
 def remove_nationality_words(keywords, query, code):
@@ -194,8 +209,9 @@ def index():
     selected_genre = request.args.get("genre", "").strip().lower()
     selected_nationality = request.args.get("nationality", "").strip().upper()
     detected_nationality = detect_nationality(query) if query else ""
-    effective_nationality = selected_nationality or detected_nationality
-    query_preferences = extract_preferences(query) if query else None
+    effective_nationality = detected_nationality or selected_nationality
+    preference_query = remove_nationality_text(query, detected_nationality) if detected_nationality else query
+    query_preferences = extract_preferences(preference_query) if query else None
     if detected_nationality and query_preferences and not query_preferences["genres"]:
         selected_genre = ""
     try:

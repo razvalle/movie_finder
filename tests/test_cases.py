@@ -151,4 +151,12 @@ TEST_CASES = [
      "expect": {"genres_include": ["mystery"], "excluded_genres_include": ["horror"]}},
     {"id": "D11", "difficulty": "description-search", "input": "something dark crime but not too violent",
      "expect": {"moods_include": ["dark"], "genres_include": ["crime"]}},
+    {"id": "NAT1", "difficulty": "nationality", "input": "recommend me indian movies",
+     "expect": {}},
+    {"id": "NAT2", "difficulty": "nationality", "input": "a japanese horror movie",
+     "expect": {"genres_include": ["horror"]}},
+    {"id": "NAT3", "difficulty": "nationality", "input": "show french dramas",
+     "expect": {"genres_include": ["drama"]}},
+    {"id": "NAT4", "difficulty": "nationality", "input": "i want to watch cabo verde movies",
+     "expect": {}},
 ]
