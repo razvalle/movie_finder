@@ -57,6 +57,34 @@
       {% endfor %}
     </section>
 
+    {% if debug_enabled and debug_view %}
+      <section class="debug-panel" aria-label="Query interpretation debug">
+        <h2>Query Debug</h2>
+        <dl class="debug-grid">
+          <dt>User query</dt><dd>{{ debug_view.raw_query }}</dd>
+          <dt>Normalized</dt><dd>{{ debug_view.normalized_query }}</dd>
+          <dt>Detected intent</dt><dd>{{ debug_view.intent }}</dd>
+          <dt>Detected country</dt><dd>{{ debug_view.country }}</dd>
+          <dt>Detected genre</dt><dd>{{ debug_view.genres }}</dd>
+          <dt>Detected year</dt><dd>{{ debug_view.year }}</dd>
+          <dt>Semantic description</dt><dd>{{ debug_view.semantic_description }}</dd>
+          <dt>Ranking</dt><dd>{{ debug_view.ranking_order }}</dd>
+        </dl>
+        <h3>Structured Query</h3>
+        <pre>{{ debug_view.structured_json }}</pre>
+        <h3>Filter Results</h3>
+        {% if debug_view.filter_results %}
+          <ul class="debug-filters">
+            {% for name, status, detail in debug_view.filter_results %}
+              <li><strong>{{ name }}:</strong> {{ status }} - {{ detail }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p>No explicit metadata filters detected.</p>
+        {% endif %}
+      </section>
+    {% endif %}
+
     <section class="results" aria-label="Movies">
         <div class="results__header">
           <h2 class="section-title">{{ 'Recommended Movies' if searched else 'All Movies' }}</h2>
@@ -120,11 +148,11 @@
         {% if total_pages > 1 %}
           <nav class="pagination" aria-label="Movie pages">
             {% if page_number > 1 %}
-              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, per_page=per_page, page=page_number - 1) }}">Previous</a>
+              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '') }}">Previous</a>
             {% endif %}
             <span>Page {{ page_number }} of {{ total_pages }}</span>
             {% if page_number < total_pages %}
-              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, per_page=per_page, page=page_number + 1) }}">Next</a>
+              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '') }}">Next</a>
             {% endif %}
           </nav>
         {% endif %}

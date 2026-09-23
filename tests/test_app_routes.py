@@ -66,6 +66,16 @@ class SearchRouteTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertIn(marker, response.data)
 
+    def test_debug_panel_shows_structured_interpretation(self):
+        response = self.client.get(
+            "/?q=whats+the+best+ph+horror+movies+from+2020&debug=1&per_page=12"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Query Debug", response.data)
+        self.assertIn(b"what is the best philippines horror movies from 2020", response.data)
+        self.assertIn(b"Philippines", response.data)
+        self.assertIn(b"Detected intent</dt><dd>best", response.data)
+
 
 if __name__ == "__main__":
     unittest.main()

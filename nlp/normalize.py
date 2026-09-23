@@ -31,6 +31,8 @@ CONTRACTIONS = [
     (re.compile(r"\bi've\b"), "i have"),
     (re.compile(r"\bi'd\b"), "i would"),
     (re.compile(r"\bi'll\b"), "i will"),
+    (re.compile(r"\bwhat's\b"), "what is"),
+    (re.compile(r"\bwhats\b"), "what is"),
     (re.compile(r"\byou're\b"), "you are"),
     (re.compile(r"\bit's\b"), "it is"),
     (re.compile(r"\bthat's\b"), "that is"),

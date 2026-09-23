@@ -21,6 +21,7 @@ import re
 import math
 import heapq
 import logging
+import json
 from pathlib import Path
 import pycountry
 
@@ -142,8 +143,65 @@ def ranking_key(entry, ranking_intent):
     votes = movie.get("vote_count") or 0
     year = movie.get("release_year") or 0
     if ranking_intent == "popular":
-        return (entry["percent"], votes, rating, year)
+        return (votes, rating, entry["percent"], year)
+    if ranking_intent == "best":
+        return (rating, votes, entry["percent"], year)
     return (entry["percent"], rating, votes, year)
+
+
+def build_debug_view(query_analysis, preferences, filtered_count, result_count):
+    """Create an inspectable summary of the local query interpretation."""
+    country = query_analysis["country"]
+    normalized = query_analysis["normalized_query"]
+    if country and query_analysis["country_phrase"]:
+        normalized = re.sub(
+            rf"(?<![a-z]){re.escape(query_analysis['country_phrase'])}(?![a-z])",
+            COUNTRY_LABELS.get(country, country).lower(),
+            normalized,
+        )
+    release_year = preferences["release_year"] or {"min": None, "max": None}
+    structured = {
+        "country": COUNTRY_LABELS.get(country, None) if country else None,
+        "genres": [title_case(genre) for genre in preferences["genres"]],
+        "excluded_genres": [title_case(genre) for genre in preferences["excluded_genres"]],
+        "moods": [title_case(mood) for mood in preferences["moods"]],
+        "themes": [title_case(theme) for theme in preferences["themes"]],
+        "year": release_year,
+        "ranking": query_analysis["ranking_intent"] or None,
+        "semantic_description": query_analysis["semantic_description"] or None,
+        "people": query_analysis["people"] or None,
+        "languages": query_analysis["languages"] or None,
+    }
+    filter_results = []
+    if country:
+        filter_results.append(("Country", "PASS", f"{COUNTRY_LABELS.get(country, country)}; {filtered_count:,} catalog candidates"))
+    if preferences["genres"]:
+        filter_results.append(("Genre", "PASS", ", ".join(title_case(genre) for genre in preferences["genres"])))
+    if release_year["min"] is not None or release_year["max"] is not None:
+        filter_results.append(("Year", "PASS", f"{release_year['min'] or 'any'} to {release_year['max'] or 'any'}"))
+    if preferences["excluded_genres"]:
+        filter_results.append(("Exclusions", "PASS", ", ".join(title_case(genre) for genre in preferences["excluded_genres"])))
+    ranking = query_analysis["ranking_intent"]
+    ranking_order = "Relevance"
+    if ranking == "best":
+        ranking_order = "Explicit filters -> Rating -> Popularity -> Relevance"
+    elif ranking == "popular":
+        ranking_order = "Explicit filters -> Popularity -> Rating -> Relevance"
+    elif ranking == "recommended":
+        ranking_order = "Explicit filters -> Relevance -> Rating -> Popularity"
+    return {
+        "raw_query": query_analysis["raw_query"],
+        "normalized_query": normalized,
+        "intent": query_analysis["ranking_intent"] or "none",
+        "country": COUNTRY_LABELS.get(country, "none") if country else "none",
+        "genres": ", ".join(title_case(genre) for genre in preferences["genres"]) or "none",
+        "year": release_year if release_year["min"] is not None or release_year["max"] is not None else "none",
+        "semantic_description": ", ".join(query_analysis["semantic_description"]) or "none",
+        "structured_json": json.dumps(structured, indent=2),
+        "filter_results": filter_results,
+        "ranking_order": ranking_order,
+        "result_count": result_count,
+    }
 
 
 def movie_country_codes(movie):
@@ -257,6 +315,7 @@ def build_preference_tags(preferences, excluded_count):
 @app.route("/", methods=["GET"])
 def index():
     query = request.args.get("q", "").strip()
+    debug_enabled = request.args.get("debug", "").strip().lower() in {"1", "true", "yes"}
     selected_genre = request.args.get("genre", "").strip().lower()
     selected_nationality = request.args.get("nationality", "").strip().upper()
     initial_query = build_structured_query(query) if query else None
@@ -330,6 +389,8 @@ def index():
         "searched": False,
         "result_count": len(filtered_movies),
         "query_debug": query_analysis["debug"] if query_analysis else {},
+        "debug_enabled": debug_enabled,
+        "debug_view": None,
     }
 
     if query:
@@ -384,6 +445,7 @@ def index():
             "result_count": len(all_results),
             "page_number": page_number,
             "total_pages": total_pages,
+            "debug_view": build_debug_view(query_analysis, ranking_preferences, len(filtered_movies), len(all_results)),
         })
     else:
         total_pages = max(1, math.ceil(len(filtered_movies) / per_page))
