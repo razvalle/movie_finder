@@ -159,4 +159,10 @@ TEST_CASES = [
      "expect": {"genres_include": ["drama"]}},
     {"id": "NAT4", "difficulty": "nationality", "input": "i want to watch cabo verde movies",
      "expect": {}},
+    {"id": "NAT5", "difficulty": "nationality", "input": "show me movies from French Guiana",
+     "expect": {}},
+    {"id": "NAT6", "difficulty": "nationality", "input": "recommend Korean action movies",
+     "expect": {"genres_include": ["action"]}},
+    {"id": "NAT7", "difficulty": "nationality", "input": "I want movies from American Samoa",
+     "expect": {}},
 ]

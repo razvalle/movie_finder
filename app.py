@@ -79,15 +79,19 @@ def country_labels():
 
 
 COUNTRY_LABELS = country_labels()
+COUNTRY_PHRASES = {
+    normalize_text(name).replace(",", " ").strip(): code
+    for code, name in COUNTRY_LABELS.items()
+}
 
 
 def detect_nationality(query):
     normalized = normalize_text(query).replace(",", " ").strip()
-    for phrase, code in sorted(NATIONALITY_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
+    for phrase, code in sorted(COUNTRY_PHRASES.items(), key=lambda item: len(item[0]), reverse=True):
         if re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", normalized):
             return code
-    for code, name in COUNTRY_LABELS.items():
-        if re.search(rf"(?<![a-z]){re.escape(name.lower())}(?![a-z])", normalized):
+    for phrase, code in sorted(NATIONALITY_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
+        if re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", normalized):
             return code
     return ""
 
