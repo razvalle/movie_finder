@@ -6,6 +6,7 @@ Run from the project root:
 
 import sys
 import unittest
+import re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -75,6 +76,19 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b"what is the best philippines horror movies from 2020", response.data)
         self.assertIn(b"Philippines", response.data)
         self.assertIn(b"Detected intent</dt><dd>best", response.data)
+
+    def test_query_year_is_applied_before_results_are_rendered(self):
+        response = self.client.get("/?q=movies+from+2015+to+2020&per_page=48")
+        self.assertEqual(response.status_code, 200)
+        years = [int(value) for value in re.findall(rb"\xc2\xb7 (\d{4})</div>", response.data)]
+        self.assertTrue(years)
+        self.assertTrue(all(2015 <= year <= 2020 for year in years))
+
+    def test_debug_panel_shows_negative_filters(self):
+        response = self.client.get("/?q=filipino+horror+movies+without+comedy&debug=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Negative filters", response.data)
+        self.assertIn(b"Comedy", response.data)
 
 
 if __name__ == "__main__":

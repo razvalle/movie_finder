@@ -6,6 +6,7 @@ filters from the residual semantic description before scoring the catalog.
 
 import re
 from datetime import date
+from difflib import SequenceMatcher
 
 import pycountry
 
@@ -13,7 +14,7 @@ from .extract import extract_preferences
 from .normalize import normalize_text
 
 RANKING_PATTERNS = {
-    "best": ("best", "top", "highest rated", "highly rated", "greatest"),
+    "best": ("best", "top", "good", "great", "highest rated", "highly rated", "greatest"),
     "popular": ("most popular", "popular", "trending"),
     "recommended": ("recommend", "recommended", "suggest"),
 }
@@ -25,8 +26,8 @@ EXPLICIT_SYNTAX_TOKENS = {
 }
 
 COUNTRY_ALIASES = {
-    "ph": "PH", "philippines": "PH", "philippine": "PH", "filipino": "PH",
-    "pinoy": "PH", "pinas": "PH", "usa": "US", "us movies": "US",
+    "ph": "PH", "philippines": "PH", "philippine": "PH", "filipino": "PH", "filipina": "PH",
+    "pinoy": "PH", "pinas": "PH", "usa": "US", "us": "US", "us movies": "US",
     "american": "US", "uk": "GB", "british": "GB", "english": "GB",
     "indian": "IN", "japanese": "JP", "korean": "KR", "south korean": "KR",
     "chinese": "CN", "french": "FR", "german": "DE", "italian": "IT",
@@ -40,8 +41,11 @@ COUNTRY_ALIASES = {
     "malaysian": "MY", "singaporean": "SG", "colombian": "CO", "chilean": "CL",
     "peruvian": "PE", "czech": "CZ", "hungarian": "HU", "romanian": "RO",
     "greek": "GR", "portuguese": "PT", "austrian": "AT", "swiss": "CH",
-    "icelandic": "IS", "uae": "AE",
+    "icelandic": "IS", "uae": "AE", "jp": "JP", "jpn": "JP",
+    "sk": "KR", "kr": "KR",
 }
+
+SHORT_COUNTRY_ALIASES = {"ph", "us", "uk", "jp", "jpn", "sk", "kr", "uae"}
 
 
 def country_labels():
@@ -66,11 +70,30 @@ def _remove_phrases(text, phrases):
 def detect_country(normalized_text):
     """Return a canonical ISO country code and matched phrase, when present."""
     for phrase, code in sorted(COUNTRY_PHRASES.items(), key=lambda item: len(item[0]), reverse=True):
+        if re.search(rf"\b(?:movies?|films?)\s+in\s+{re.escape(phrase)}\b", normalized_text):
+            continue
         if re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", normalized_text):
             return code, phrase
     for phrase, code in sorted(COUNTRY_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
+        if phrase in SHORT_COUNTRY_ALIASES and not re.search(
+            r"\b(?:movie|movies|film|films|cinema|from|made|produced|country)\b",
+            normalized_text,
+        ):
+            continue
+        if re.search(rf"\b(?:movies?|films?)\s+in\s+{re.escape(phrase)}\b", normalized_text):
+            continue
         if re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", normalized_text):
             return code, phrase
+    for phrase, code in sorted(COUNTRY_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
+        if len(phrase) < 5 or " " in phrase:
+            continue
+        if not re.search(r"\b(?:movie|movies|film|films|cinema|from|made|country)\b", normalized_text):
+            continue
+        if re.search(rf"\b(?:movies?|films?)\s+in\s+{re.escape(phrase)}\b", normalized_text):
+            continue
+        for token in normalized_text.split():
+            if SequenceMatcher(None, token, phrase).ratio() >= 0.88:
+                return code, token
     return "", ""
 
 
@@ -93,6 +116,9 @@ def detect_people_and_language(normalized_text):
     match = re.search(r"\b([a-z]+)\s+(?:language|language movies|films)\b", normalized_text)
     if match:
         languages.append(match.group(1))
+    match = re.search(r"\b(?:in|sa)\s+([a-z]+)\s+(?:movies?|films?|cinema)\b", normalized_text)
+    if match:
+        languages.append(match.group(1))
     return people, languages
 
 
@@ -107,8 +133,15 @@ def build_structured_query(raw_query, content_text=None):
     preferences = extract_preferences(cleaned)
     preferences["free_text_keywords"] = [
         word for word in preferences["free_text_keywords"]
-        if word not in EXPLICIT_SYNTAX_TOKENS and not re.fullmatch(r"\d{2,4}", word)
+        if word not in EXPLICIT_SYNTAX_TOKENS
+        and not re.fullmatch(r"\d{2,4}s?", word)
+        and not re.fullmatch(r"(?:19|20)\d{2}s", word)
     ]
+    if preferences["runtime"]["min"] is not None or preferences["runtime"]["max"] is not None or preferences["runtime"]["target"] is not None:
+        preferences["free_text_keywords"] = [
+            word for word in preferences["free_text_keywords"]
+            if not re.fullmatch(r"\d+(?:\.\d+)?", word) and word not in {"long", "short", "less", "least", "more", "longer"}
+        ]
 
     # A rom-com is explicitly both romance and comedy, not merely romance.
     if re.search(r"\b(?:romcom|rom-com|rom com)\b", normalized):
@@ -117,6 +150,8 @@ def build_structured_query(raw_query, content_text=None):
         preferences["genres"] = sorted(set(preferences["genres"]) | {"comedy"})
     if re.search(r"\b(?:romantic|love story)\b", normalized):
         preferences["genres"] = sorted(set(preferences["genres"]) | {"romance"})
+    if re.search(r"\b(?:make me cry|cry|tearful)\b", normalized):
+        preferences["moods"] = sorted(set(preferences["moods"]) | {"sad"})
     # "scary movies" is an explicit horror request; bare "scary" stays a mood.
     if re.search(r"\bscary\s+(?:movie|movies|film|films)\b", normalized):
         preferences["genres"] = sorted(set(preferences["genres"]) | {"horror"})

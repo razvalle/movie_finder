@@ -166,6 +166,7 @@ def build_debug_view(query_analysis, preferences, filtered_count, result_count):
         "excluded_genres": [title_case(genre) for genre in preferences["excluded_genres"]],
         "moods": [title_case(mood) for mood in preferences["moods"]],
         "themes": [title_case(theme) for theme in preferences["themes"]],
+        "excluded_content_descriptors": preferences.get("excluded_content_descriptors", []),
         "year": release_year,
         "ranking": query_analysis["ranking_intent"] or None,
         "semantic_description": query_analysis["semantic_description"] or None,
@@ -181,6 +182,8 @@ def build_debug_view(query_analysis, preferences, filtered_count, result_count):
         filter_results.append(("Year", "PASS", f"{release_year['min'] or 'any'} to {release_year['max'] or 'any'}"))
     if preferences["excluded_genres"]:
         filter_results.append(("Exclusions", "PASS", ", ".join(title_case(genre) for genre in preferences["excluded_genres"])))
+    if preferences.get("excluded_content_descriptors"):
+        filter_results.append(("Content exclusions", "PASS", ", ".join(preferences["excluded_content_descriptors"])))
     ranking = query_analysis["ranking_intent"]
     ranking_order = "Relevance"
     if ranking == "best":
@@ -195,6 +198,9 @@ def build_debug_view(query_analysis, preferences, filtered_count, result_count):
         "intent": query_analysis["ranking_intent"] or "none",
         "country": COUNTRY_LABELS.get(country, "none") if country else "none",
         "genres": ", ".join(title_case(genre) for genre in preferences["genres"]) or "none",
+        "excluded_genres": ", ".join(title_case(genre) for genre in preferences["excluded_genres"]) or "none",
+        "excluded_content_descriptors": ", ".join(preferences.get("excluded_content_descriptors", [])) or "none",
+        "unsupported_filters": query_analysis["unsupported_filters"] or None,
         "year": release_year if release_year["min"] is not None or release_year["max"] is not None else "none",
         "semantic_description": ", ".join(query_analysis["semantic_description"]) or "none",
         "structured_json": json.dumps(structured, indent=2),
@@ -207,6 +213,19 @@ def build_debug_view(query_analysis, preferences, filtered_count, result_count):
 def movie_country_codes(movie):
     """Use TMDB production countries when enriched, otherwise IMDb listing regions."""
     return movie.get("production_countries") or movie.get("origin_regions", [movie.get("nationality")])
+
+
+def movie_matches_release_year(movie, constraint):
+    """Apply an explicit release-year request as a hard catalog filter."""
+    if not constraint:
+        return True
+    year = movie.get("release_year")
+    if year is None:
+        return False
+    return (
+        (constraint["min"] is None or year >= constraint["min"])
+        and (constraint["max"] is None or year <= constraint["max"])
+    )
 
 
 def find_title_matches(query, movies):
@@ -366,6 +385,10 @@ def index():
         movie for movie in MOVIES
         if (not selected_genre or selected_genre in movie["genres"])
         and (not effective_nationality or effective_nationality in movie_country_codes(movie))
+        and movie_matches_release_year(
+            movie,
+            query_preferences["release_year"] if query_preferences else None,
+        )
     ]
 
     context = {

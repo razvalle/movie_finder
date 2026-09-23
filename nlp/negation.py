@@ -25,7 +25,7 @@ when extract.py checks the scope.
 NEGATION_CUES = {
     "not", "no", "without", "except", "excluding", "avoid", "avoiding",
     "exclude", "excluding", "skip", "skipping", "besides", "leave",
-    "never", "none", "nothing", "unless",
+    "never", "none", "nothing", "unless", "walang", "huwag", "ayaw",
 }
 
 # Two-word cues are checked separately since our tokens are single words.

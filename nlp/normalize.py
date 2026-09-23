@@ -54,6 +54,12 @@ def normalize_text(raw_input):
 
     text = raw_input.lower().strip()
     text = text.replace("\u2019", "'").replace("\u2018", "'").replace("`", "'")
+    text = re.sub(r"\bu\s*[.]?\s*k\s*[.]?(?=\W|$)", "uk", text)
+    text = re.sub(r"\bu\s*[.]?\s*s\s*[.]?(?=\W|$)", "us", text)
+    text = re.sub(r"\bp\s*[.]?\s*h\s*[.]?(?=\W|$)", "ph", text)
+    text = re.sub(r"\bj\s*[.]?\s*p\s*[.]?(?=\W|$)", "jp", text)
+    text = re.sub(r"\bs\s*[.]?\s*k\s*[.]?(?=\W|$)", "sk", text)
+    text = re.sub(r"\bk\s*[.]?\s*r\s*[.]?(?=\W|$)", "kr", text)
     text = re.sub(r"\bdon[?]\s*t\b", "dont", text)
     text = re.sub(r"\bdon\s+t\b", "dont", text)
 

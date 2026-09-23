@@ -26,7 +26,18 @@ class StructuredQueryTests(unittest.TestCase):
         self.assert_query("best ph movies", country="PH", ranking="best")
         self.assert_query("best filipino movies", country="PH", ranking="best")
         self.assert_query("best pinoy movies", country="PH", ranking="best")
+        self.assert_query("movies from pinas", country="PH")
+        self.assert_query("PH. films", country="PH")
+        self.assert_query("US movies", country="US")
+        self.assert_query("USA movies", country="US")
+        self.assert_query("U.K. films", country="GB")
+        self.assert_query("JP movies", country="JP")
+        self.assert_query("JPN films", country="JP")
+        self.assert_query("SK movies", country="KR")
+        self.assert_query("KR films", country="KR")
+        self.assert_query("UAE movies", country="AE")
         self.assert_query("highest rated movies from japan", country="JP", ranking="best")
+        self.assert_query("good filipino movies", country="PH", ranking="best")
 
     def test_requested_genre_aliases(self):
         self.assert_query("best pinoy horror movies", country="PH", ranking="best", genres=("horror",))
@@ -41,6 +52,10 @@ class StructuredQueryTests(unittest.TestCase):
         self.assert_query("movies after 2020", year={"min": 2021, "max": None})
         self.assert_query("movies before 2010", year={"min": None, "max": 2009})
         self.assert_query("movies without romance", excluded=("romance",))
+        self.assert_query("movies in 2020", year={"min": 2020, "max": 2020})
+        self.assert_query("movies 2015-2020", year={"min": 2015, "max": 2020})
+        self.assert_query("movies from the 1990s", year={"min": 1990, "max": 1999})
+        self.assert_query("movies in the 2010s", year={"min": 2010, "max": 2019})
 
     def test_explicit_filters_do_not_pollute_description(self):
         parsed = self.assert_query(
@@ -53,6 +68,15 @@ class StructuredQueryTests(unittest.TestCase):
         self.assertNotIn("best", parsed["semantic_description"])
         self.assertNotIn("filipino", parsed["semantic_description"])
         self.assertNotIn("horror", parsed["semantic_description"])
+        self.assertNotIn("2020", parsed["semantic_description"])
+
+    def test_semantic_residual_keeps_description_only(self):
+        parsed = build_structured_query("best Filipino horror movies about a haunted mansion from 2020")
+        self.assertEqual(parsed["semantic_description"], ["mansion"])
+        self.assertNotIn("best", parsed["semantic_description"])
+        self.assertNotIn("filipino", parsed["semantic_description"])
+        self.assertNotIn("horror", parsed["semantic_description"])
+        self.assertNotIn("2020", parsed["semantic_description"])
 
     def test_ranking_people_and_language_entities(self):
         ranking = build_structured_query("best movies")

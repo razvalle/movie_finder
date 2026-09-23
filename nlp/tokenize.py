@@ -17,14 +17,16 @@ STOPWORDS = {
     "something", "someone", "just", "also", "can", "could", "would",
     "feel", "feeling", "like", "watching", "watch", "movie", "movies",
     "every", "all", "anything", "everything", "genre", "genres",
-    "not", "no", "without", "except", "excluding", "avoid", "avoiding",
+    "not", "no", "without", "except", "excluding", "avoid", "avoiding", "walang", "huwag", "ayaw",
     "exclude", "skip", "besides", "leave", "out", "unless", "but",
-    "prefer", "preferably", "please", "rather", "mind",
+    "prefer", "preferably", "please", "rather", "mind", "too", "much", "will", "made", "make",
     "about", "movie", "movies", "film", "films", "something", "someone",
     "people", "person", "character", "characters", "story", "stories",
     "with", "from", "into", "through", "around", "someone", "something",
     "want", "watch", "watching", "recommend", "recommendation",
     "called", "named", "titled",
+    "what", "whats", "really", "very", "kinda", "kind", "maybe", "pls", "lol",
+    "na", "sa", "tungkol", "noong", "ba", "lang", "mas", "pero", "at", "ng",
     "film", "films", "get", "got", "have", "has", "had", "am", "are", "do",
     # Common Taglish filler particles, so keyword bags stay clean for
     # mixed English/Tagalog queries too.

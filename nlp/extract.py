@@ -59,6 +59,7 @@ def extract_preferences(raw_input):
 
     moods, genres, themes = set(), set(), set()
     excluded_moods, excluded_genres, excluded_themes = set(), set(), set()
+    content_descriptors, excluded_content_descriptors = set(), set()
 
     # Track which token indices got claimed by a category match, so we
     # can build a "leftover words" bag for the TF-IDF/synopsis-similarity
@@ -88,6 +89,7 @@ def extract_preferences(raw_input):
             "mood": excluded_moods if negated else moods,
             "genre": excluded_genres if negated else genres,
             "theme": excluded_themes if negated else themes,
+            "content_descriptor": excluded_content_descriptors if negated else content_descriptors,
         }[hit["category"]]
 
         target_set.add(hit["tag"])
@@ -113,6 +115,8 @@ def extract_preferences(raw_input):
         "excluded_moods": sorted(excluded_moods),
         "excluded_genres": sorted(excluded_genres),
         "excluded_themes": sorted(excluded_themes),
+        "content_descriptors": sorted(content_descriptors),
+        "excluded_content_descriptors": sorted(excluded_content_descriptors),
         "runtime": runtime,
         "release_year": release_year,
         "free_text_keywords": free_text_keywords,

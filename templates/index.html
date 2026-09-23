@@ -67,6 +67,9 @@
           <dt>Detected country</dt><dd>{{ debug_view.country }}</dd>
           <dt>Detected genre</dt><dd>{{ debug_view.genres }}</dd>
           <dt>Detected year</dt><dd>{{ debug_view.year }}</dd>
+          <dt>Negative filters</dt><dd>{{ debug_view.excluded_genres }}</dd>
+          <dt>Negative content</dt><dd>{{ debug_view.excluded_content_descriptors }}</dd>
+          <dt>Unsupported metadata</dt><dd>{{ debug_view.unsupported_filters or 'none' }}</dd>
           <dt>Semantic description</dt><dd>{{ debug_view.semantic_description }}</dd>
           <dt>Ranking</dt><dd>{{ debug_view.ranking_order }}</dd>
         </dl>

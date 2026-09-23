@@ -82,12 +82,17 @@ def score_release_year(constraint, movie_year):
 
 
 def is_excluded(movie, preferences):
-    """True if the movie should be hard-filtered out due to an excluded genre/mood/theme match."""
+    """True if the movie matches any explicitly excluded catalog attribute."""
     if any(g in movie["genres"] for g in preferences["excluded_genres"]):
         return True
     if any(m in movie["mood_tags"] for m in preferences["excluded_moods"]):
         return True
     if any(t in movie["themes"] for t in preferences["excluded_themes"]):
+        return True
+    if any(
+        descriptor in movie.get("content_descriptors", [])
+        for descriptor in preferences.get("excluded_content_descriptors", [])
+    ):
         return True
     return False
 

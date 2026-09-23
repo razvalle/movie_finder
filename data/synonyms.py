@@ -21,15 +21,15 @@ dictionary dynamically through build_reverse_index().
 
 MOOD_SYNONYMS = {
     "suspenseful": ["suspense", "thriller", "thrilling", "tense", "edge of your seat", "nail biting", "gripping"],
-    "scary": ["scare", "scared", "horror", "frightening", "terrifying", "spooky", "creepy", "eerie"],
-    "funny": ["funny", "comedy", "humorous", "hilarious", "comedic", "silly", "goofy", "witty"],
-    "sad": ["sad", "emotional", "tragic", "tearjerker", "tear jerker", "heartbreaking", "heartbroken", "grieving", "grief-stricken", "depressing", "somber"],
+    "scary": ["scare", "scared", "horror", "frightening", "terrifying", "spooky", "creepy", "eerie", "nakakatakot"],
+    "funny": ["funny", "comedy", "humorous", "hilarious", "comedic", "silly", "goofy", "witty", "nakakatawa", "nakakatawang"],
+    "sad": ["sad", "emotional", "tragic", "tearjerker", "tear jerker", "heartbreaking", "heartbroken", "grieving", "grief-stricken", "depressing", "somber", "cry", "tearful"],
     "romantic": ["romance", "romantic", "love story", "loving", "sweet"],
-    "happy": ["happy", "uplifting", "feel good", "heartwarming", "wholesome", "cheerful"],
+    "happy": ["happy", "uplifting", "feel good", "heartwarming", "wholesome", "cheerful", "maganda", "magandang"],
     "dark": ["dark", "gritty", "bleak", "grim", "disturbing"],
     "exciting": ["exciting", "thrilling", "action packed", "adrenaline", "energetic", "fast paced"],
     "relaxing": ["relaxing", "calm", "chill", "light", "easygoing", "cozy", "gentle"],
-    "thought-provoking": ["thought provoking", "philosophical", "deep", "mind bending", "cerebral"],
+    "thought-provoking": ["thought provoking", "philosophical", "deep", "mind bending", "mind blowing", "cerebral"],
     "whimsical": ["whimsical", "quirky", "magical", "dreamy", "charming"],
     "epic": ["epic", "grand", "sweeping", "awe inspiring"],
     "nostalgic": ["nostalgic", "nostalgia"],
@@ -45,7 +45,7 @@ MOOD_SYNONYMS = {
 # are unaffected since those exact words never appear in GENRE_SYNONYMS.
 
 GENRE_SYNONYMS = {
-    "horror": ["horror", "horrors", "horror film", "horror films", "scary movie", "slasher", "slashers"],
+    "horror": ["horror", "horrors", "horror film", "horror films", "scary movie", "scary films", "slasher", "slashers"],
     "comedy": ["comedy", "comedies", "sitcom"],
     "romance": ["romance", "romances", "love story", "love stories", "rom com", "rom-com", "romcom"],
     "drama": ["drama", "dramas", "dramatic movie", "dramatic film"],
@@ -57,7 +57,7 @@ GENRE_SYNONYMS = {
     "animation": ["animation", "animated", "animated movie", "cartoon", "cartoons"],
     "crime": ["crime", "crime drama", "crime dramas", "gangster movie", "gangster movies"],
     "adventure": ["adventure"],
-    "family": ["family movie", "family movies", "kids movie", "kids movies", "family friendly", "family-friendly"],
+    "family": ["family movie", "family movies", "kids movie", "kids movies", "family friendly", "family-friendly", "pamilya", "pelikula ng pamilya"],
     "musical": ["musical", "musicals", "music movie", "music movies"],
     "music": ["music movie", "music movies", "musician movie", "musician movies"],
     "documentary": ["documentary", "documentaries", "docu"],
@@ -86,6 +86,11 @@ THEME_SYNONYMS = {
     "serial killer": ["serial killer", "killer on the loose"],
     "mental health": ["mental health", "mental illness", "mental institution", "healing from trauma"],
     "cultural identity": ["cultural identity", "culture clash"],
+}
+
+CONTENT_DESCRIPTOR_SYNONYMS = {
+    "violence": ["violent", "violence", "gore", "gory", "blood", "bloody"],
+    "adult": ["adult", "explicit", "nsfw"],
 }
 
 RELEASE_ERA_SYNONYMS = {
@@ -117,6 +122,7 @@ def build_reverse_index():
     register(GENRE_SYNONYMS, "genre")
     register(MOOD_SYNONYMS, "mood")
     register(THEME_SYNONYMS, "theme")
+    register(CONTENT_DESCRIPTOR_SYNONYMS, "content_descriptor")
 
     return index
 

@@ -24,7 +24,7 @@ def extract_release_year_constraint(normalized_text):
         start, end = sorted((int(match.group(1)), int(match.group(2))))
         return {"min": start, "max": end}
 
-    match = re.search(r"from the (\d{2}|\d{4})s", normalized_text)
+    match = re.search(r"\b(?:from the |from |in )?(\d{2}|\d{4})s\b", normalized_text)
     if match:
         decade = int(match.group(1))
         if decade < 100:
