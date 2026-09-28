@@ -41,13 +41,6 @@
             <option value="" {% if not award_filter %}selected{% endif %}>All films</option>
             <option value="winners" {% if award_filter %}selected{% endif %}>Major award winners</option>
           </select>
-          <label for="nationality">Country / IMDb region</label>
-          <select id="nationality" name="nationality" class="genre-filter">
-            <option value="">All origins</option>
-            {% for nationality in nationalities %}
-              <option value="{{ nationality }}" {% if selected_nationality == nationality %}selected{% endif %}>{{ nationality_labels.get(nationality, nationality) }}</option>
-            {% endfor %}
-          </select>
           <label for="per_page">Per page</label>
           <select id="per_page" name="per_page" class="genre-filter">
             {% for option in per_page_options %}

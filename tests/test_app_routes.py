@@ -43,10 +43,10 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b"The Grand Budapest Hotel", response.data)
 
     def test_country_overrides_stale_origin(self):
-        response = self.client.get("/?q=movies+from+cabo+verde&nationality=IN&per_page=12")
+        response = self.client.get("/?q=movies+from+cabo+verde&nationality=IN&per_page=12&debug=1")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'value="CV" selected', response.data)
-        self.assertNotIn(b'value="IN" selected', response.data)
+        self.assertNotIn(b'id="nationality"', response.data)
+        self.assertIn(b"Detected country</dt><dd>Cabo Verde", response.data)
 
     def test_query_genre_overrides_stale_dropdown(self):
         response = self.client.get("/?q=japanese+horror+movies&genre=action&per_page=12")
@@ -56,7 +56,7 @@ class SearchRouteTests(unittest.TestCase):
 
     def test_country_genre_and_human_input_routes(self):
         cases = [
-            ("/?q=japanese+horror+movies&genre=action&nationality=IN&per_page=12", b'value="JP" selected'),
+            ("/?q=japanese+horror+movies&genre=action&nationality=IN&per_page=12&debug=1", b"Detected country</dt><dd>Japan"),
             ("/?q=a+detective+solving+a+murder+in+a+mansion&per_page=12", b"Recommended Movies"),
             ("/?q=scarry+rom+com+but+no+sad+ending+under+two+hours&per_page=12", b"Recommended Movies"),
             ("/?q=recommend+a+canadian+movie+called+incendies&per_page=12", b"Incendies"),
