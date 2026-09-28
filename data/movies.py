@@ -36,6 +36,7 @@ TO EXPAND THE DATASET TO 500+ RECORDS:
 
 import json
 from pathlib import Path
+from .award_winners import annotate_awards
 
 
 MOVIES = [
@@ -828,3 +829,5 @@ MOVIES.extend(GENERATED_MOVIES)
 REAL_CATALOG_PATH = Path(__file__).with_name("imdb_movies.json")
 if REAL_CATALOG_PATH.is_file():
     MOVIES = json.loads(REAL_CATALOG_PATH.read_text(encoding="utf-8"))
+
+annotate_awards(MOVIES)

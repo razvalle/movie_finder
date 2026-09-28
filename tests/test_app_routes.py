@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import COUNTRY_LABELS, app, detect_nationality
+from data.generated_movies import GENERATED_MOVIES
 from data.movies import MOVIES
 
 
@@ -89,6 +90,19 @@ class SearchRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Negative filters", response.data)
         self.assertIn(b"Comedy", response.data)
+
+    def test_award_filter_shows_recognized_movies(self):
+        response = self.client.get("/?awards=winners&per_page=12")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'value="winners" selected', response.data)
+        self.assertIn(b"Academy Award", response.data)
+        self.assertNotIn(b"Story 0009", response.data)
+
+    def test_popular_fallback_contains_real_high_vote_titles(self):
+        self.assertEqual(len(GENERATED_MOVIES), 1000)
+        self.assertTrue(all(movie["title"] and movie["vote_count"] >= 10_000 for movie in GENERATED_MOVIES))
+        self.assertFalse(any(re.fullmatch(r".+ Story \d{4}", movie["title"]) for movie in GENERATED_MOVIES))
+        self.assertTrue(any(movie.get("notable_awards") for movie in GENERATED_MOVIES))
 
 
 if __name__ == "__main__":

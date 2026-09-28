@@ -364,6 +364,13 @@ body {
   margin: 0 0 0.7rem;
 }
 
+.movie-card__recognition {
+  margin: 0 0 0.55rem;
+  color: var(--gold-500);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .movie-card__reasons {
   list-style: none;
   margin: 0;

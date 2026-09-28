@@ -57,6 +57,18 @@ real movie titles, original titles, release years, runtimes, genres, adult
 flags, ratings, and vote counts. IMDb bulk data does not provide plot
 synopses or posters, so those fields remain metadata-based or optional.
 
+When the full catalog is not installed, the app uses the 65 hand-curated
+records plus 1,000 real IMDb titles with the highest vote counts in the local
+export. The compact `data/popular_movies.json` is tracked for deployment; to
+rebuild it after importing an IMDb catalog, run:
+
+```
+python data/build_popular_movies.py
+```
+
+The Recognition filter selects movies with a curated major-award win label.
+Popularity in the fallback catalog is based on IMDb vote counts.
+
 ### Adding real plot descriptions
 
 TMDB provides real plot overviews. Set a TMDB v3 API key in the terminal and

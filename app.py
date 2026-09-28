@@ -134,7 +134,7 @@ def poster_exists(movie):
 
 
 def movie_rank_key(movie):
-    return (movie.get("average_rating") or 0, movie.get("vote_count", 0), movie.get("release_year", 0))
+    return (movie.get("vote_count", 0), movie.get("average_rating") or 0, movie.get("release_year", 0))
 
 
 def ranking_key(entry, ranking_intent):
@@ -337,6 +337,7 @@ def index():
     debug_enabled = request.args.get("debug", "").strip().lower() in {"1", "true", "yes"}
     selected_genre = request.args.get("genre", "").strip().lower()
     selected_nationality = request.args.get("nationality", "").strip().upper()
+    award_filter = request.args.get("awards", "").strip().lower() == "winners"
     initial_query = build_structured_query(query) if query else None
     detected_nationality = initial_query["country"] if initial_query else ""
     filter_conflicts = []
@@ -385,6 +386,7 @@ def index():
         movie for movie in MOVIES
         if (not selected_genre or selected_genre in movie["genres"])
         and (not effective_nationality or effective_nationality in movie_country_codes(movie))
+        and (not award_filter or movie.get("notable_awards"))
         and movie_matches_release_year(
             movie,
             query_preferences["release_year"] if query_preferences else None,
@@ -395,6 +397,7 @@ def index():
         "query": query,
         "selected_genre": selected_genre,
         "selected_nationality": effective_nationality,
+        "award_filter": award_filter,
         "detected_nationality": detected_nationality,
         "filter_conflicts": filter_conflicts,
         "nationality_label": COUNTRY_LABELS.get(effective_nationality, effective_nationality),

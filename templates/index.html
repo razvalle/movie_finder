@@ -36,6 +36,11 @@
               <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %}>{{ genre|title }}</option>
             {% endfor %}
           </select>
+          <label for="awards">Recognition</label>
+          <select id="awards" name="awards" class="genre-filter">
+            <option value="" {% if not award_filter %}selected{% endif %}>All films</option>
+            <option value="winners" {% if award_filter %}selected{% endif %}>Major award winners</option>
+          </select>
           <label for="nationality">Country / IMDb region</label>
           <select id="nationality" name="nationality" class="genre-filter">
             <option value="">All origins</option>
@@ -109,6 +114,12 @@
                   <div class="movie-card__rank">#{{ r.rank }}</div>
                   <h3 class="movie-card__title">{{ r.movie.title }}</h3>
                   <div class="movie-card__meta">{{ r.genres_display }} · {{ r.movie.runtime }} min · {{ r.movie.release_year }}</div>
+                  {% if r.movie.get('average_rating') is not none %}
+                    <div class="movie-card__meta">IMDb {{ '%.1f'|format(r.movie.average_rating) }}/10 · {{ '{:,}'.format(r.movie.vote_count) }} votes</div>
+                  {% endif %}
+                  {% if r.movie.notable_awards %}
+                    <p class="movie-card__recognition">{{ r.movie.notable_awards | join(' · ') }}</p>
+                  {% endif %}
                   <p class="movie-card__synopsis">{{ r.movie.synopsis }}</p>
                   <ul class="movie-card__reasons">
                     {% for reason in r.reasons %}
@@ -137,6 +148,12 @@
                 <div class="movie-card__content">
                   <h3 class="movie-card__title">{{ movie.title }}</h3>
                   <div class="movie-card__meta">{{ movie.genres | map('title') | join(', ') }} · {{ movie.runtime }} min · {{ movie.release_year }} · {{ nationality_labels.get((movie.production_countries or movie.origin_regions or [movie.nationality])[0], movie.nationality or 'Unknown') }}</div>
+                  {% if movie.get('average_rating') is not none %}
+                    <div class="movie-card__meta">IMDb {{ '%.1f'|format(movie.average_rating) }}/10 · {{ '{:,}'.format(movie.vote_count) }} votes</div>
+                  {% endif %}
+                  {% if movie.notable_awards %}
+                    <p class="movie-card__recognition">{{ movie.notable_awards | join(' · ') }}</p>
+                  {% endif %}
                   <p class="movie-card__synopsis">{{ movie.synopsis }}</p>
                 </div>
               </article>
@@ -151,11 +168,11 @@
         {% if total_pages > 1 %}
           <nav class="pagination" aria-label="Movie pages">
             {% if page_number > 1 %}
-              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '') }}">Previous</a>
+              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, awards='winners' if award_filter else '', per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '') }}">Previous</a>
             {% endif %}
             <span>Page {{ page_number }} of {{ total_pages }}</span>
             {% if page_number < total_pages %}
-              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '') }}">Next</a>
+              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, awards='winners' if award_filter else '', per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '') }}">Next</a>
             {% endif %}
           </nav>
         {% endif %}
