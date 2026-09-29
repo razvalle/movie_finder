@@ -1,0 +1,84 @@
+(() => {
+  const form = document.querySelector(".search__form");
+  if (!form) return;
+
+  const button = form.querySelector(".search__button");
+  const status = document.querySelector(".search__status");
+  const originalLabel = button.textContent;
+  let timer = 0;
+  let activeController = null;
+  let requestVersion = 0;
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    window.clearTimeout(timer);
+    activeController?.abort();
+
+    const controller = new AbortController();
+    activeController = controller;
+    const version = ++requestVersion;
+    const params = new URLSearchParams(new FormData(form, event.submitter));
+    const url = `${form.action}?${params.toString()}`;
+    button.disabled = true;
+    button.textContent = "Searching...";
+    form.setAttribute("aria-busy", "true");
+    status.textContent = "Searching movies...";
+
+    timer = window.setTimeout(async () => {
+      const timeout = window.setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: { "X-Requested-With": "fetch" },
+        });
+        if (!response.ok) throw new Error(`Search failed: ${response.status}`);
+        const html = await response.text();
+        if (version !== requestVersion) return;
+
+        const nextPage = new DOMParser().parseFromString(html, "text/html");
+        const nextResults = nextPage.querySelector(".results");
+        const currentResults = document.querySelector(".results");
+        if (!nextResults || !currentResults) throw new Error("Search results missing");
+        currentResults.replaceWith(nextResults);
+
+        const currentDebug = document.querySelector(".debug-panel");
+        const nextDebug = nextPage.querySelector(".debug-panel");
+        if (currentDebug && nextDebug) currentDebug.replaceWith(nextDebug);
+        else if (currentDebug) currentDebug.remove();
+        else if (nextDebug) nextResults.before(nextDebug);
+
+        window.history.pushState({}, "", url);
+        status.textContent = "";
+      } catch (error) {
+        if (version !== requestVersion) return;
+        if (error.name === "AbortError") {
+          status.textContent = "Search took too long. Please try again.";
+        } else {
+          window.location.assign(url);
+        }
+      } finally {
+        window.clearTimeout(timeout);
+        if (version === requestVersion) {
+          button.disabled = false;
+          button.textContent = originalLabel;
+          form.removeAttribute("aria-busy");
+          activeController = null;
+        }
+      }
+    }, 220);
+  });
+
+  form.addEventListener("input", () => {
+    if (!activeController) return;
+    requestVersion += 1;
+    window.clearTimeout(timer);
+    activeController.abort();
+    activeController = null;
+    button.disabled = false;
+    button.textContent = originalLabel;
+    form.removeAttribute("aria-busy");
+    status.textContent = "";
+  });
+
+  window.addEventListener("popstate", () => window.location.reload());
+})();

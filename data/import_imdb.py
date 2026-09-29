@@ -24,7 +24,7 @@ BASICS_PATH = IMDB_DIR / "title.basics.tsv.gz"
 RATINGS_PATH = IMDB_DIR / "title.ratings.tsv.gz"
 AKAS_PATH = IMDB_DIR / "title.akas.tsv.gz"
 OUTPUT_PATH = DATA_DIR / "imdb_movies.json"
-START_YEAR = 2000
+START_YEAR = 1990
 END_YEAR = 2026
 
 

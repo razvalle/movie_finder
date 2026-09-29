@@ -53,6 +53,17 @@
       {% for conflict in filter_conflicts %}
         <p class="filter-conflict">{{ conflict }}</p>
       {% endfor %}
+      <p class="search__status" role="status" aria-live="polite"></p>
+      {% if search_notice %}
+        <p class="search-notice">{{ search_notice }}</p>
+        {% if alternative_queries %}
+          <ul class="search-alternatives">
+            {% for alternative in alternative_queries %}
+              <li><a href="{{ url_for('index', q=alternative, per_page=per_page, genre=selected_genre, awards='winners' if award_filter else '') }}">{{ alternative }}</a></li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      {% endif %}
     </section>
 
     {% if debug_enabled and debug_view %}
@@ -107,6 +118,7 @@
                   <div class="movie-card__rank">#{{ r.rank }}</div>
                   <h3 class="movie-card__title">{{ r.movie.title }}</h3>
                   <div class="movie-card__meta">{{ r.genres_display }} · {{ r.movie.runtime }} min · {{ r.movie.release_year }}</div>
+                  <p class="movie-card__match-reason">{{ r.match_reason }}</p>
                   {% if r.movie.get('average_rating') is not none %}
                     <div class="movie-card__meta">IMDb {{ '%.1f'|format(r.movie.average_rating) }}/10 · {{ '{:,}'.format(r.movie.vote_count) }} votes</div>
                   {% endif %}
@@ -177,5 +189,6 @@
     <p>MOVIE_FINDER_GROUP4</p>
   </footer>
 
+  <script src="{{ url_for('static', filename='js/smart-search.js') }}" defer></script>
 </body>
 </html>

@@ -60,7 +60,7 @@ class SearchRouteTests(unittest.TestCase):
             ("/?q=a+detective+solving+a+murder+in+a+mansion&per_page=12", b"Recommended Movies"),
             ("/?q=scarry+rom+com+but+no+sad+ending+under+two+hours&per_page=12", b"Recommended Movies"),
             ("/?q=recommend+a+canadian+movie+called+incendies&per_page=12", b"Incendies"),
-            ("/?q=zzzzunknownword&per_page=12", b"No movies found."),
+            ("/?q=zzzzunknownword&per_page=12", b"No close matches found; showing popular titles instead."),
         ]
         for url, marker in cases:
             with self.subTest(url=url):

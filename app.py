@@ -32,8 +32,9 @@ from nlp.extract import extract_preferences
 from nlp.normalize import normalize_text
 from nlp.query import build_structured_query, detect_country
 from nlp.tfidf import load_or_build_tfidf_model
-from nlp.scoring import rank_movies
+from nlp.scoring import is_excluded, rank_movies
 from nlp.explain import explain_match, title_case
+from nlp.smart_search import allow_search, understand_query, retrieve_candidates, rerank_candidates
 
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
@@ -334,6 +335,10 @@ def build_preference_tags(preferences, excluded_count):
 @app.route("/", methods=["GET"])
 def index():
     query = request.args.get("q", "").strip()
+    if len(query) > 500:
+        query = query[:500]
+    if query and not allow_search(request.remote_addr or "unknown"):
+        return "Search limit reached. Please wait a minute and try again.", 429
     debug_enabled = request.args.get("debug", "").strip().lower() in {"1", "true", "yes"}
     selected_genre = request.args.get("genre", "").strip().lower()
     selected_nationality = request.args.get("nationality", "").strip().upper()
@@ -368,6 +373,7 @@ def index():
         effective_nationality = ""
     if detected_nationality and query_preferences and not query_preferences["genres"]:
         selected_genre = ""
+    understanding = understand_query(query) if query else None
     try:
         per_page = int(request.args.get("per_page", DEFAULT_PER_PAGE))
     except ValueError:
@@ -382,22 +388,73 @@ def index():
     nationalities = sorted({
         code for movie in MOVIES for code in movie_country_codes(movie) if code
     })
-    filtered_movies = [
-        movie for movie in MOVIES
-        if (not selected_genre or selected_genre in movie["genres"])
-        and (not effective_nationality or effective_nationality in movie_country_codes(movie))
-        and (not award_filter or movie.get("notable_awards"))
-        and movie_matches_release_year(
-            movie,
-            query_preferences["release_year"] if query_preferences else None,
+    llm_year_range = understanding["year_range"] if understanding else {}
+    llm_min_rating = understanding["min_rating"] if understanding else None
+    query_genres = list(query_preferences["genres"]) if query_preferences else []
+    if query_preferences and understanding:
+        if not query_genres and not selected_genre:
+            query_genres = [genre for genre in understanding["genres"] if genre in genres]
+            query_preferences["genres"] = query_genres
+        if not query_preferences["release_year"] and (llm_year_range.get("from") or llm_year_range.get("to")):
+            query_preferences["release_year"] = {
+                "min": llm_year_range.get("from"),
+                "max": llm_year_range.get("to"),
+            }
+        for exclusion in understanding["exclusions"]:
+            excluded_genre = normalize_text(exclusion).replace(",", " ").strip()
+            if excluded_genre in genres and excluded_genre not in query_preferences["excluded_genres"]:
+                query_preferences["excluded_genres"].append(excluded_genre)
+
+    year_constraint = query_preferences["release_year"] if query_preferences else None
+
+    def matching_base_filters(movie):
+        return (
+            (not selected_genre or selected_genre in movie["genres"])
+            and (not effective_nationality or effective_nationality in movie_country_codes(movie))
+            and (not award_filter or movie.get("notable_awards"))
         )
-    ]
+
+    base_movies = [movie for movie in MOVIES if matching_base_filters(movie)]
+
+    def search_pool(include_genres=True, include_year=True, include_rating=True):
+        pool = []
+        for movie in base_movies:
+            if include_genres and query_genres and not any(genre in movie["genres"] for genre in query_genres):
+                continue
+            if query_preferences and is_excluded(movie, query_preferences):
+                continue
+            if include_year and not movie_matches_release_year(movie, year_constraint):
+                continue
+            rating = movie.get("average_rating")
+            if include_rating and llm_min_rating is not None and (rating is None or rating < llm_min_rating):
+                continue
+            pool.append(movie)
+        return pool
+
+    filtered_movies = search_pool()
+    search_notice = ""
+    if query and not filtered_movies:
+        relaxed_year_rating = search_pool(include_year=False, include_rating=False)
+        if relaxed_year_rating:
+            filtered_movies = relaxed_year_rating
+            search_notice = "Showing closest matches; year or rating limits were relaxed."
+        elif query_genres and not selected_genre:
+            relaxed_genre = search_pool(include_genres=False, include_year=False, include_rating=False)
+            if relaxed_genre:
+                filtered_movies = relaxed_genre
+                search_notice = "Showing closest matches; genre, year, or rating limits were relaxed."
+        if not filtered_movies:
+            filtered_movies = search_pool(include_genres=False, include_year=False, include_rating=False)
+            if filtered_movies:
+                search_notice = "Showing closest matches; descriptive filters were relaxed."
 
     context = {
         "query": query,
         "selected_genre": selected_genre,
         "selected_nationality": effective_nationality,
         "award_filter": award_filter,
+        "search_notice": search_notice,
+        "alternative_queries": understanding["alternative_queries"] if understanding else [],
         "detected_nationality": detected_nationality,
         "filter_conflicts": filter_conflicts,
         "nationality_label": COUNTRY_LABELS.get(effective_nationality, effective_nationality),
@@ -443,10 +500,37 @@ def index():
             ranking_preferences["genres"] = []
             ranking_preferences["moods"] = []
             ranking_preferences["themes"] = []
-        ranking = rank_movies(search_movies, ranking_preferences, TFIDF_MODEL)
+        candidates = retrieve_candidates(query, understanding, search_movies, TFIDF_MODEL)
+        if candidates and all(item.get("fallback_only") for item in candidates):
+            if not search_notice:
+                search_notice = "No close matches found; showing popular titles instead."
+            context["search_notice"] = search_notice
+            context["alternative_queries"] = understanding["alternative_queries"] or [
+                "popular " + (understanding["core_intent"] or "movies"),
+                "movies with " + ", ".join(understanding["keywords"][:3]),
+            ]
+        candidates = rerank_candidates(query, candidates)
+        candidate_movies = [item["movie"] for item in candidates]
+        scoring_preferences = dict(ranking_preferences)
+        scoring_preferences["free_text_keywords"] = []
+        scoring_preferences["moods"] = []
+        scoring_preferences["themes"] = []
+        ranking = rank_movies(candidate_movies, scoring_preferences, TFIDF_MODEL)
+        candidate_by_id = {str(item["movie"]["id"]): item for item in candidates}
         all_results = ranking["results"]
+        max_votes = max((item["movie"].get("vote_count", 0) for item in candidates), default=0)
+        for entry in all_results:
+            candidate = candidate_by_id[str(entry["movie"]["id"])]
+            entry["match_reason"] = candidate["match_reason"]
+            popularity = math.log1p(entry["movie"].get("vote_count", 0)) / math.log1p(max_votes) if max_votes else 0
+            if candidate.get("final_score") is None:
+                candidate["final_score"] = candidate["search_score"] * 0.78 + entry["percent"] * 0.20
+            entry["final_score"] = candidate["final_score"] + popularity * 2
+        all_results.sort(key=lambda entry: entry["final_score"], reverse=True)
         if query_analysis["ranking_intent"]:
-            all_results.sort(key=lambda entry: ranking_key(entry, query_analysis["ranking_intent"]), reverse=True)
+            all_results.sort(key=lambda entry: (
+                ranking_key(entry, query_analysis["ranking_intent"]), entry["final_score"]
+            ), reverse=True)
         total_pages = max(1, math.ceil(len(all_results) / per_page))
         page_number = min(page_number, total_pages)
         start = (page_number - 1) * per_page
@@ -462,6 +546,7 @@ def index():
                 "poster_exists": poster_exists(movie),
                 "genres_display": ", ".join(title_case(g) for g in movie["genres"]),
                 "reasons": explain_match(movie, ranking_preferences, entry["breakdown"]),
+                "match_reason": entry["match_reason"],
             })
 
         context.update({
@@ -473,6 +558,15 @@ def index():
             "total_pages": total_pages,
             "debug_view": build_debug_view(query_analysis, ranking_preferences, len(filtered_movies), len(all_results)),
         })
+        if not all_results:
+            alternatives = understanding["alternative_queries"] or [
+                "popular " + (understanding["core_intent"] or "movies"),
+                "movies with " + ", ".join(understanding["keywords"][:3]),
+            ]
+            context["alternative_queries"] = alternatives[:3]
+            if not search_notice:
+                search_notice = "No close matches found. Try one of these searches:"
+            context["search_notice"] = search_notice
     else:
         total_pages = max(1, math.ceil(len(filtered_movies) / per_page))
         page_number = min(page_number, total_pages)

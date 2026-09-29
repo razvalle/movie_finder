@@ -15,6 +15,14 @@ SOURCE_PATH = DATA_DIR / "imdb_movies.json"
 OUTPUT_PATH = DATA_DIR / "popular_movies.json"
 POPULAR_MOVIE_COUNT = 1000
 MINIMUM_VOTES = 10_000
+PINNED_TITLES = [
+    ("queen of katwe", 2016),
+    ("groundhog day", 1993),
+    ("dumb and dumber", 1994),
+    ("tommy boy", 1995),
+    ("event horizon", 1997),
+    ("searching for bobby fischer", 1993),
+]
 
 
 def normalized_title(title):
@@ -58,7 +66,18 @@ def build_popular_movies():
 
     popular_movies = []
     seen = set()
-    for source_movie in candidates:
+    candidate_by_title = {
+        (normalized_title(movie["title"]), movie["release_year"]): movie
+        for movie in source_movies
+        if movie.get("title") and not movie.get("is_adult")
+    }
+    ordered_candidates = [
+        candidate_by_title[key]
+        for key in PINNED_TITLES
+        if key in candidate_by_title and key not in excluded_titles
+    ]
+    ordered_candidates.extend(candidates)
+    for source_movie in ordered_candidates:
         title_key = (normalized_title(source_movie["title"]), source_movie["release_year"])
         if title_key in seen:
             continue
