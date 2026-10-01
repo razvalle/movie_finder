@@ -11,7 +11,6 @@ import json
 import os
 import sys
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -24,7 +23,6 @@ PROGRESS_PATH = DATA_DIR / "movie_public_progress.json"
 WIKIDATA_ENDPOINT = "https://query.wikidata.org/sparql"
 BATCH_SIZE = 50
 REQUEST_DELAY_SECONDS = 1.0
-TITLE_REQUEST_DELAY_SECONDS = 5.0
 USER_AGENT = "MovieFinderGroup4/1.0 (public movie metadata enrichment)"
 
 
@@ -87,21 +85,10 @@ def fetch_title_metadata(movies):
             with urllib.request.urlopen(request, timeout=60) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             return payload.get("results", {}).get("bindings", [])
-        except urllib.error.HTTPError as exc:
-            if exc.code != 429 and exc.code < 500:
-                raise
-            retry_after = exc.headers.get("Retry-After")
-            try:
-                delay = float(retry_after) if retry_after else min(120.0, 15.0 * (2 ** attempt))
-            except ValueError:
-                delay = min(120.0, 15.0 * (2 ** attempt))
-            time.sleep(max(1.0, delay))
-            if attempt == 2:
-                raise
         except (OSError, ValueError):
             if attempt == 2:
                 raise
-            time.sleep(min(120.0, 15.0 * (2 ** attempt)))
+            time.sleep(2 ** attempt)
     return []
 
 
@@ -216,17 +203,25 @@ def enrich_deployment_catalog():
 
     remaining = [
         movie for movie in movies
-        if movie.get("imdb_id") and str(movie["imdb_id"]) not in progress
+        if movie.get("imdb_id") and (
+            str(movie["imdb_id"]) not in progress
+            or not progress.get(str(movie["imdb_id"]))
+            or progress.get(str(movie["imdb_id"]), {}).get("_retry")
+        )
     ]
     for start in range(0, len(remaining), BATCH_SIZE):
         batch = remaining[start:start + BATCH_SIZE]
         try:
             bindings = fetch_metadata([movie["imdb_id"] for movie in batch])
         except Exception as exc:
+            for movie in batch:
+                progress[str(movie["imdb_id"])] = {
+                    "_retry": True,
+                    "error": type(exc).__name__,
+                }
             write_json_atomic(PROGRESS_PATH, progress)
-            raise RuntimeError(
-                f"Public metadata lookup failed after {start:,}/{len(remaining):,} records; rerun to resume."
-            ) from exc
+            print(f"Skipped IMDb batch at {start:,}: {type(exc).__name__}; marked for retry.")
+            continue
         progress.update(records_from_bindings(batch, bindings))
         for movie in batch:
             progress.setdefault(str(movie["imdb_id"]), {})
@@ -238,7 +233,11 @@ def enrich_deployment_catalog():
     curated_remaining = [
         movie for movie in movies
         if not movie.get("imdb_id") and movie.get("title") and movie.get("release_year")
-        and f"id:{movie.get('id')}" not in progress
+        and (
+            f"id:{movie.get('id')}" not in progress
+            or not progress.get(f"id:{movie.get('id')}")
+            or progress.get(f"id:{movie.get('id')}", {}).get("_retry")
+        )
     ]
     title_batch_size = 1
     for start in range(0, len(curated_remaining), title_batch_size):
@@ -246,17 +245,20 @@ def enrich_deployment_catalog():
         try:
             bindings = fetch_title_metadata(batch)
         except Exception as exc:
+            progress[f"id:{batch[0].get('id')}"] = {
+                "_retry": True,
+                "error": type(exc).__name__,
+            }
             write_json_atomic(PROGRESS_PATH, progress)
-            raise RuntimeError(
-                f"Public title lookup failed after {start:,}/{len(curated_remaining):,} curated records; rerun to resume."
-            ) from exc
+            print(f"Skipped curated title at {start:,}: {type(exc).__name__}; marked for retry.")
+            continue
         progress.update(records_from_title_bindings(batch, bindings))
         for movie in batch:
             progress.setdefault(f"id:{movie.get('id')}", {})
         write_json_atomic(PROGRESS_PATH, progress)
         print(f"Checked {min(start + len(batch), len(curated_remaining)):,}/{len(curated_remaining):,} curated records")
         if start + title_batch_size < len(curated_remaining):
-            time.sleep(TITLE_REQUEST_DELAY_SECONDS)
+            time.sleep(1.2)
 
     by_id = {
         str(movie.get("imdb_id")) if movie.get("imdb_id") else f"id:{movie.get('id')}": movie
@@ -265,15 +267,23 @@ def enrich_deployment_catalog():
     records = [
         {**{key: movie.get(key) for key in ("id", "imdb_id", "title") if movie.get(key) is not None}, **metadata}
         for record_key, metadata in progress.items()
-        if (movie := by_id.get(record_key)) is not None and isinstance(metadata, dict) and len(metadata) > 0
+        if (movie := by_id.get(record_key)) is not None
+        and isinstance(metadata, dict)
+        and metadata
+        and not metadata.get("_retry")
     ]
     write_json_atomic(OUTPUT_PATH, records)
-    PROGRESS_PATH.unlink(missing_ok=True)
+    retry_count = sum(1 for metadata in progress.values() if isinstance(metadata, dict) and metadata.get("_retry"))
+    if retry_count:
+        write_json_atomic(PROGRESS_PATH, progress)
+    else:
+        PROGRESS_PATH.unlink(missing_ok=True)
     poster_count = sum(bool(record.get("poster_url")) for record in records)
     country_count = sum(bool(record.get("production_countries")) for record in records)
     print(
         f"Wrote {len(records):,} records with public metadata; "
-        f"{poster_count:,} Commons poster images and {country_count:,} production-country records."
+        f"{poster_count:,} Commons poster images and {country_count:,} production-country records; "
+        f"{retry_count:,} records marked for retry."
     )
     return records
 

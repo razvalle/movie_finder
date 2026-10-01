@@ -127,24 +127,6 @@ TMDB supplies them. Set `TMDB_CATALOG_PATH=deployment` to enrich exactly the
 processing a large local-only IMDb export. The app merges matching rows from
 `data/movie_cast_enrichment.json` at startup.
 
-#### Keyless public origin/poster metadata
-
-When no TMDB key is available, run:
-
-```powershell
-python data/enrich_public_metadata.py
-```
-
-This resumable script joins IMDb IDs and, for curated entries without IMDb IDs,
-exact English title plus release year against Wikidata. It writes
-`data/movie_public_enrichment.json` and the app fills missing production-country
-fields from that artifact without overwriting TMDB data. It accepts Commons
-images only when the filename identifies a poster and links each image to its
-Commons file page. It does not use Wikipedia fair-use posters or unrelated film
-stills. Coverage depends on Wikidata; movies without a verified record keep
-"Origin unavailable". This run produced 1,054 country records and 4 freely hosted
-poster candidates for the 1,065-record Render catalog.
-
 The app never claims the entire movie has no women: the current script stores at
 most 15 top-billed credits, which cannot prove absence from the full cast or film.
 Strong and moderate labels describe only the available credit evidence; weak and
@@ -171,14 +153,12 @@ silently present basic results as verified. When no candidates are available,
 the UI offers three parser-generated alternatives, or deterministic general
 alternatives if the parser is unavailable.
 
-The local catalog in this workspace loads 404,553 IMDb records from a
+The local catalog in this workspace currently loads 404,553 IMDb records from a
 gitignored `data/imdb_movies.json`: all have a `synopsis` and `keywords`, 326,138
 have a runtime, and none currently have TMDB `overview`, cast, tagline, or
 certification because `data/movie_cast_enrichment.json` is absent. The deployed
 tracked catalog is the compact popular set plus curated records; IMDb bulk data
-does not provide plot, cast, movie posters, or production countries. The keyless
-public artifact is keyed to the compact Render catalog; the local full IMDb
-catalog only receives records whose IMDb IDs overlap. Therefore requests that depend on absent
+does not provide plot or cast metadata. Therefore requests that depend on absent
 or partial fields (for example, proving there are no women or no violence) can
 only be partial/unverified until enrichment is bundled, and some negative claims
 remain impossible to prove even with top-billed cast enrichment.
@@ -241,14 +221,30 @@ details remain in the catalog's original language.
 
 Age ratings are display-only metadata on individual movie cards; there is no age
 rating filter. The header moon/sun control stores the theme in browser local
-storage. TMDB certification and poster paths are stored by `data/enrich_cast.py`
-when supplied by TMDB; public production-country and Commons poster metadata can
-be generated with `data/enrich_public_metadata.py`. Cards display each movie's
-own image/origin only when sourced data exists; IMDb `origin_regions` are release
-markets and are never presented as production origin. Bundle either generated
-enrichment JSON with the Render deployment. Missing posters are omitted rather
-than replaced by a shared image, and missing production data is labeled
-"Origin unavailable".
+storage. TMDB certification, poster paths, and production countries are stored
+by `data/enrich_cast.py` when supplied by TMDB. Cards show a movie-specific TMDB
+poster and production origin only when those fields exist; IMDb `origin_regions`
+are release markets and are not presented as a film's production origin. Bundle
+an updated `data/movie_cast_enrichment.json` with the Render deployment after
+running enrichment. Without that file, cards omit unavailable posters, show
+"Origin unavailable", and omit certification rather than substituting a shared
+placeholder or a potentially misleading region.
+
+### Keyless poster and origin fallback
+
+When `TMDB_API_KEY` is unavailable, `data/enrich_public_metadata.py` enriches
+the compact Render catalog from public Wikidata data. It joins IMDb-backed
+records by IMDb ID and curated records by exact English title plus release year.
+It records production countries from Wikidata property `P495` and uses only
+Wikimedia Commons images whose filenames explicitly identify them as posters.
+Stills and unrelated images are rejected; accepted images carry a per-card
+Commons source link. The script is resumable and keeps failed public lookups
+retryable instead of aborting the whole run.
+
+The generated `data/movie_public_enrichment.json` bundle contains 1,054
+production-country records and 4 explicitly identified Commons poster images.
+It is bundled with the Render deployment. TMDB remains preferred when available
+and takes precedence over these fallback fields.
 
 ### TMDB attribution and deployment notes
 
