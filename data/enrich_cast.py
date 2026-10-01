@@ -297,6 +297,7 @@ def enrich_catalog():
         tmdb_runtime = details.get("runtime")
         if isinstance(tmdb_runtime, int) and tmdb_runtime > 0:
             movie["runtime"] = tmdb_runtime
+        movie["original_language"] = (details.get("original_language") or "").strip().lower()
         movie["certification"] = ""
         release_dates = details.get("release_dates") or {}
         if isinstance(release_dates, dict):

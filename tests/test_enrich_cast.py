@@ -43,6 +43,7 @@ class CastEnrichmentTests(unittest.TestCase):
             "overview": "A unit crosses a border under cover of night.",
             "tagline": "",
             "runtime": 106,
+            "original_language": "en",
             "keywords": {"keywords": [{"name": "military"}]},
             "release_dates": {"results": []},
         }
@@ -76,6 +77,7 @@ class CastEnrichmentTests(unittest.TestCase):
             self.assertEqual(enriched[0]["all_male_evidence"], "strong")
             self.assertEqual(enriched[0]["synopsis"], details["overview"])
             self.assertEqual(enriched[0]["runtime"], details["runtime"])
+            self.assertEqual(enriched[0]["original_language"], details["original_language"])
             self.assertEqual(enriched[0]["keywords"], ["The Unit", "military"])
             self.assertEqual(report["enriched_records"], 1)
             self.assertEqual(len(report["top_five_evidence"]), 1)

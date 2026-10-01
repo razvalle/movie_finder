@@ -120,12 +120,12 @@ The classifier distinguishes between:
 - contradicted: any female cast or female-character cues appear in the billed cast
   or narrative metadata.
 
-The script also stores overview, tagline, TMDB keywords, runtime, and a release
-certification when TMDB supplies them. `TMDB_CATALOG_PATH` is optional; use it to
-select a specific catalog instead of accidentally enriching a large local-only
-IMDb export. The compact `data/popular_movies.json` is the catalog deployed by
-the repository when `data/imdb_movies.json` is absent. The app merges matching
-rows from `data/movie_cast_enrichment.json` at startup.
+The script also stores overview, tagline, TMDB keywords, runtime, original
+language, and a release certification when TMDB supplies them. `TMDB_CATALOG_PATH`
+is optional; use it to select a specific catalog instead of accidentally enriching
+a large local-only IMDb export. The compact `data/popular_movies.json` is the
+catalog deployed by the repository when `data/imdb_movies.json` is absent. The app
+merges matching rows from `data/movie_cast_enrichment.json` at startup.
 
 The app never claims the entire movie has no women: the current script stores at
 most 15 top-billed credits, which cannot prove absence from the full cast or film.
@@ -209,6 +209,21 @@ and memory; the tracked compact catalog keeps that bounded.
 - Add curated violence/romance and character-presence annotations with provenance.
 - Move query/verifier caches and rate limits to shared Redis for multi-worker Render.
 - Add offline relevance and calibration evaluations with a labeled query set.
+
+### Interface filters and preferences
+
+Genre, Recognition, Per page, Language, and Age rating changes submit immediately;
+Enter submits the search without adding a newline. Language filtering uses the
+TMDB `original_language` field saved by `data/enrich_cast.py`, and age filtering
+uses TMDB release certification. If the deployed enrichment file has no values
+for either field, the filter remains available but the assistant explains why it
+cannot return verified records. Bundle an updated `data/movie_cast_enrichment.json`
+with the Render deployment after running enrichment.
+
+The header moon/sun control stores the selected theme in browser local storage.
+The interface-language control currently supports English and Spanish labels and
+assistant guidance; movie titles, synopses, and search results remain in their
+original catalog language.
 
 ### TMDB attribution and deployment notes
 

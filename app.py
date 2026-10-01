@@ -34,6 +34,7 @@ from nlp.query import build_structured_query, detect_country
 from nlp.tfidf import load_or_build_tfidf_model
 from nlp.scoring import is_excluded, rank_movies
 from nlp.explain import explain_match, title_case
+from nlp.conversation import build_assistant_message
 from nlp.smart_search import MAX_CANDIDATES, allow_search, understand_query, retrieve_candidates, rerank_candidates
 from nlp.cast_verification import classify_cast_gender, evaluate_cast_constraint
 
@@ -69,6 +70,12 @@ DEFAULT_ALTERNATIVE_QUERIES = [
     "highly rated science fiction movies",
     "mystery movies with an investigation",
 ]
+COMMON_LANGUAGE_LABELS = {
+    "ar": "Arabic", "de": "German", "en": "English", "es": "Spanish",
+    "fr": "French", "hi": "Hindi", "it": "Italian", "ja": "Japanese",
+    "ko": "Korean", "pt": "Portuguese", "ru": "Russian", "zh": "Chinese",
+}
+COMMON_AGE_RATINGS = ("G", "PG", "PG-13", "R", "NC-17")
 
 NATIONALITY_ALIASES = {
     "american": "US", "british": "GB", "english": "GB", "indian": "IN",
@@ -226,6 +233,18 @@ def movie_country_codes(movie):
     return movie.get("production_countries") or movie.get("origin_regions", [movie.get("nationality")])
 
 
+def language_options(movies):
+    codes = {str(movie.get("original_language") or "").strip().lower() for movie in movies}
+    codes.discard("")
+    if not codes:
+        codes = set(COMMON_LANGUAGE_LABELS)
+    options = []
+    for code in sorted(codes):
+        language = pycountry.languages.get(alpha_2=code) or pycountry.languages.get(alpha_3=code)
+        options.append((code, COMMON_LANGUAGE_LABELS.get(code, getattr(language, "name", code.upper()))))
+    return options
+
+
 def movie_matches_release_year(movie, constraint):
     """Apply an explicit release-year request as a hard catalog filter."""
     if not constraint:
@@ -376,6 +395,8 @@ def index():
         return "Search limit reached. Please wait a minute and try again.", 429
     debug_enabled = request.args.get("debug", "").strip().lower() in {"1", "true", "yes"}
     selected_genre = request.args.get("genre", "").strip().lower()
+    selected_language = request.args.get("language", "").strip().lower()
+    selected_age_rating = request.args.get("age_rating", "").strip().upper()
     selected_nationality = request.args.get("nationality", "").strip().upper()
     award_filter = request.args.get("awards", "").strip().lower() == "winners"
     initial_query = build_structured_query(query) if query else None
@@ -417,6 +438,17 @@ def index():
     except ValueError:
         page_number = 1
     genres = sorted({genre for movie in MOVIES for genre in movie["genres"]})
+    movie_languages = language_options(MOVIES)
+    available_languages = {str(movie.get("original_language") or "").strip().lower() for movie in MOVIES}
+    available_languages.discard("")
+    age_ratings = sorted(set(COMMON_AGE_RATINGS) | {
+        str(movie.get("certification") or "").strip().upper()
+        for movie in MOVIES if str(movie.get("certification") or "").strip()
+    })
+    available_age_ratings = {
+        str(movie.get("certification") or "").strip().upper()
+        for movie in MOVIES if str(movie.get("certification") or "").strip()
+    }
     nationalities = sorted({
         code for movie in MOVIES for code in movie_country_codes(movie) if code
     })
@@ -444,6 +476,8 @@ def index():
     def matching_base_filters(movie):
         return (
             (not selected_genre or selected_genre in movie["genres"])
+            and (not selected_language or str(movie.get("original_language") or "").strip().lower() == selected_language)
+            and (not selected_age_rating or str(movie.get("certification") or "").strip().upper() == selected_age_rating)
             and (not effective_nationality or effective_nationality in movie_country_codes(movie))
             and (not award_filter or movie.get("notable_awards"))
         )
@@ -494,10 +528,18 @@ def index():
     context = {
         "query": query,
         "selected_genre": selected_genre,
+        "selected_language": selected_language,
+        "selected_age_rating": selected_age_rating,
+        "language_options": movie_languages,
+        "age_ratings": age_ratings,
+        "language_metadata_available": bool(available_languages),
+        "age_rating_metadata_available": bool(available_age_ratings),
         "selected_nationality": effective_nationality,
         "award_filter": award_filter,
         "search_notice": search_notice,
         "alternative_queries": understanding["alternative_queries"] if understanding else [],
+        "assistant_message": "",
+        "assistant_state": "",
         "detected_nationality": detected_nationality,
         "filter_conflicts": filter_conflicts,
         "nationality_label": COUNTRY_LABELS.get(effective_nationality, effective_nationality),
@@ -520,6 +562,23 @@ def index():
         "debug_view": None,
     }
 
+    if not query:
+        filter_metadata_missing = bool(
+            selected_language and not available_languages
+            or selected_age_rating and not available_age_ratings
+        )
+        context["assistant_state"] = "unmapped" if filter_metadata_missing else ""
+        if filter_metadata_missing:
+            context["alternative_queries"] = DEFAULT_ALTERNATIVE_QUERIES
+        context["assistant_message"] = build_assistant_message(
+            "",
+            len(filtered_movies),
+            selected_language=selected_language,
+            selected_rating=selected_age_rating,
+            language_available=bool(available_languages),
+            rating_available=bool(available_age_ratings),
+        )
+
     if query:
         preferences = query_preferences
         cast_constraint = preferences.get("cast_gender")
@@ -535,6 +594,8 @@ def index():
                 "result_count_label": "0 closest matches",
                 "results": [],
                 "search_notice": "No close matches found. This catalog cannot verify strict gender-based negatives such as 'no woman', so no movie can be confirmed as a true match.",
+                "assistant_message": build_assistant_message(query, 0),
+                "assistant_state": "empty",
                 "alternative_queries": [
                     "movies with women",
                     "movies featuring a strong female lead",
@@ -679,6 +740,23 @@ def index():
         if any(entry["verification_fallback"] for entry in all_results) or not understanding.get("llm_used"):
             fallback_notice = "Smart matching is unavailable right now, showing basic results."
             search_notice = f"{fallback_notice} {search_notice}" if search_notice else fallback_notice
+        missing_requirements = list(dict.fromkeys(
+            item for entry in all_results
+            for item in entry["unsatisfied"] + entry["unverifiable"]
+        ))
+        context["assistant_state"] = "exact" if exact_results else "partial" if all_results else "empty"
+        context["assistant_message"] = build_assistant_message(
+            query,
+            len(all_results),
+            exact_count=len(exact_results),
+            selected_language=selected_language,
+            selected_rating=selected_age_rating,
+            language_available=bool(available_languages),
+            rating_available=bool(available_age_ratings),
+            genres=(understanding.get("genres") or query_preferences.get("genres", [])),
+            understood_terms=understanding.get("keywords", []) or understanding.get("expanded_concepts", []),
+            missing_requirements=missing_requirements,
+        )
         context.update({
             "preference_tags": build_preference_tags(ranking_preferences, ranking["excluded_count"]),
             "results": display_results,
@@ -688,6 +766,8 @@ def index():
             "total_pages": total_pages,
             "debug_view": build_debug_view(query_analysis, ranking_preferences, len(filtered_movies), len(all_results)),
             "search_notice": search_notice,
+            "assistant_message": context["assistant_message"],
+            "assistant_state": context["assistant_state"],
         })
         if not all_results:
             context["result_count_label"] = "0 closest matches"

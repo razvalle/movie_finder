@@ -3,6 +3,7 @@
   if (!form) return;
 
   const button = form.querySelector(".search__button");
+  const searchInput = form.querySelector("#q");
   const status = document.querySelector(".search__status");
   const originalLabel = button.textContent;
   let timer = 0;
@@ -41,6 +42,11 @@
         if (!nextResults || !currentResults) throw new Error("Search results missing");
         currentResults.replaceWith(nextResults);
 
+        const currentFeedback = document.querySelector(".search-feedback");
+        const nextFeedback = nextPage.querySelector(".search-feedback");
+        if (currentFeedback && nextFeedback) currentFeedback.replaceWith(nextFeedback);
+        window.dispatchEvent(new Event("movie-finder:content-updated"));
+
         const currentDebug = document.querySelector(".debug-panel");
         const nextDebug = nextPage.querySelector(".debug-panel");
         if (currentDebug && nextDebug) currentDebug.replaceWith(nextDebug);
@@ -66,6 +72,16 @@
         }
       }
     }, 220);
+  });
+
+  searchInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+    event.preventDefault();
+    form.requestSubmit(button);
+  });
+
+  form.querySelectorAll(".filter-row select").forEach((filter) => {
+    filter.addEventListener("change", () => form.requestSubmit(button));
   });
 
   form.addEventListener("input", () => {

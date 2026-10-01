@@ -100,6 +100,46 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b"Academy Award", response.data)
         self.assertNotIn(b"Story 0009", response.data)
 
+    def test_language_and_age_rating_filters_apply_together(self):
+        movies = [
+            {
+                "id": 999991, "title": "English Film", "synopsis": "English record.",
+                "genres": ["drama"], "runtime": 90, "release_year": 2020,
+                "themes": [], "mood_tags": [], "keywords": [], "content_descriptors": [],
+                "original_language": "en", "certification": "PG", "average_rating": 7.0,
+                "vote_count": 100, "notable_awards": [], "origin_regions": ["US"], "nationality": "US",
+            },
+            {
+                "id": 999992, "title": "Spanish Film", "synopsis": "Spanish record.",
+                "genres": ["drama"], "runtime": 90, "release_year": 2020,
+                "themes": [], "mood_tags": [], "keywords": [], "content_descriptors": [],
+                "original_language": "es", "certification": "R", "average_rating": 7.0,
+                "vote_count": 100, "notable_awards": [], "origin_regions": ["ES"], "nationality": "ES",
+            },
+        ]
+        with patch("app.MOVIES", movies):
+            response = self.client.get("/?language=es&age_rating=R")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Spanish Film", response.data)
+        self.assertNotIn(b"English Film", response.data)
+        self.assertIn(b'value="es" selected', response.data)
+        self.assertIn(b'value="R" selected', response.data)
+
+    def test_manual_show_movies_button_is_removed_and_controls_exist(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b"Show Movies", response.data)
+        self.assertIn(b'name="language"', response.data)
+        self.assertIn(b'name="age_rating"', response.data)
+        self.assertIn(b'id="theme-toggle"', response.data)
+
+    def test_unavailable_filter_offers_alternative_searches(self):
+        response = self.client.get("/?language=es")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"catalog doesn&#39;t include language details yet", response.data)
+        self.assertIn(b'class="search-alternatives"', response.data)
+        self.assertNotIn(b"Missing or unverified", response.data)
+
     def test_negated_query_does_not_match_on_generic_title_words(self):
         response = self.client.get("/?q=a+movie+where+there+is+no+woman&per_page=12")
         self.assertEqual(response.status_code, 200)
