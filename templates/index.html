@@ -169,6 +169,7 @@
                     <p class="movie-card__recognition">{{ r.movie.notable_awards | join(' · ') }}</p>
                   {% endif %}
                   <p class="movie-card__synopsis">{{ r.movie.synopsis }}</p>
+                  {% if r.movie.get('poster_source_url') %}<a class="movie-card__poster-credit" href="{{ r.movie.poster_source_url }}" target="_blank" rel="noopener noreferrer" data-i18n="commonsCredit">Poster image source: Wikimedia Commons</a>{% endif %}
                   <ul class="movie-card__reasons">
                     {% for reason in r.reasons %}
                       <li>
@@ -208,6 +209,7 @@
                     <p class="movie-card__recognition">{{ movie.notable_awards | join(' · ') }}</p>
                   {% endif %}
                   <p class="movie-card__synopsis">{{ movie.synopsis }}</p>
+                  {% if movie.get('poster_source_url') %}<a class="movie-card__poster-credit" href="{{ movie.poster_source_url }}" target="_blank" rel="noopener noreferrer" data-i18n="commonsCredit">Poster image source: Wikimedia Commons</a>{% endif %}
                 </div>
               </article>
             {% endfor %}

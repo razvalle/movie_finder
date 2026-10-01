@@ -842,4 +842,18 @@ if CAST_ENRICHMENT_PATH.is_file():
         if enrichment_key in enrichment_by_key:
             movie.update(enrichment_by_key[enrichment_key])
 
+PUBLIC_ENRICHMENT_PATH = Path(__file__).with_name("movie_public_enrichment.json")
+if PUBLIC_ENRICHMENT_PATH.is_file():
+    public_movies = json.loads(PUBLIC_ENRICHMENT_PATH.read_text(encoding="utf-8"))
+    public_by_key = {
+        str(movie.get("imdb_id") or f"id:{movie.get('id')}"): movie
+        for movie in public_movies
+    }
+    for movie in MOVIES:
+        public_record = public_by_key.get(str(movie.get("imdb_id") or f"id:{movie.get('id')}"))
+        if public_record:
+            for key, value in public_record.items():
+                if not movie.get(key) and value:
+                    movie[key] = value
+
 annotate_awards(MOVIES)

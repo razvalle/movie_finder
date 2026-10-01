@@ -150,6 +150,12 @@ def movie_poster_url(movie):
     poster_path = movie.get("poster_path")
     if isinstance(poster_path, str) and poster_path.startswith("/"):
         return f"https://image.tmdb.org/t/p/w342{poster_path}"
+    poster_url = movie.get("poster_url")
+    if isinstance(poster_url, str) and poster_url.startswith((
+        "https://commons.wikimedia.org/wiki/Special:FilePath/",
+        "https://upload.wikimedia.org/wikipedia/commons/",
+    )):
+        return poster_url
     return ""
 
 

@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import COUNTRY_LABELS, app, detect_nationality
+from app import COUNTRY_LABELS, app, detect_nationality, movie_poster_url
 from data.generated_movies import GENERATED_MOVIES
 from data.movies import MOVIES
 
@@ -185,6 +185,11 @@ class SearchRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Origin unavailable", response.data)
         self.assertNotIn(b"United Arab Emirates", response.data)
+
+    def test_commons_poster_url_is_movie_specific_and_host_allowlisted(self):
+        commons_url = "https://commons.wikimedia.org/wiki/Special:FilePath/Film_Poster.jpg"
+        self.assertEqual(movie_poster_url({"poster_url": commons_url}), commons_url)
+        self.assertEqual(movie_poster_url({"poster_url": "https://example.invalid/poster.jpg"}), "")
 
     def test_unavailable_filter_offers_alternative_searches(self):
         response = self.client.get("/?language=es")
