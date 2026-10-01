@@ -19,9 +19,18 @@
           <span class="theme-toggle__icon" aria-hidden="true">☾</span>
         </button>
         <label class="sr-only" for="ui-language" data-i18n="interfaceLanguage">Interface language</label>
-        <select id="ui-language" class="genre-filter" aria-label="Interface language">
-          <option value="en">English</option>
-          <option value="es">Español</option>
+        <select id="ui-language" class="genre-filter" aria-label="Interface and movie language">
+          <option value="" {% if not selected_language %}selected{% endif %} data-i18n="allLanguages">All movie languages</option>
+          <option value="en" lang="en" {% if selected_language == 'en' %}selected{% endif %}>English</option>
+          <option value="es" lang="es" {% if selected_language == 'es' %}selected{% endif %}>Español</option>
+          <option value="tl" lang="tl" {% if selected_language == 'tl' %}selected{% endif %}>Tagalog</option>
+          <option value="fr" lang="fr" {% if selected_language == 'fr' %}selected{% endif %}>Français</option>
+          <option value="de" lang="de" {% if selected_language == 'de' %}selected{% endif %}>Deutsch</option>
+          <option value="pt" lang="pt" {% if selected_language == 'pt' %}selected{% endif %}>Português</option>
+          <option value="ja" lang="ja" {% if selected_language == 'ja' %}selected{% endif %}>日本語</option>
+          <option value="ko" lang="ko" {% if selected_language == 'ko' %}selected{% endif %}>한국어</option>
+          <option value="zh" lang="zh" {% if selected_language == 'zh' %}selected{% endif %}>中文</option>
+          <option value="hi" lang="hi" {% if selected_language == 'hi' %}selected{% endif %}>हिन्दी</option>
         </select>
       </div>
     </div>
@@ -29,7 +38,7 @@
 
   <main class="stage">
 
-    <section class="search" aria-label="Movie search">
+    <section class="search" aria-label="Movie search" data-i18n-aria="searchRegion">
       <form class="search__form" action="{{ url_for('index') }}" method="get">
         <label class="search__label" for="q" data-i18n="findLabel">Find a movie</label>
         <div class="search__row">
@@ -44,11 +53,12 @@
           <button class="search__button" type="submit" data-i18n="findButton">Find Movies</button>
         </div>
         <div class="filter-row">
+          <input type="hidden" id="movie-language" name="language" value="{{ selected_language }}" />
           <label for="genre" data-i18n="genreLabel">Genre</label>
           <select id="genre" name="genre" class="genre-filter">
             <option value="" data-i18n="allGenres">All genres</option>
             {% for genre in genres %}
-              <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %}>{{ genre|title }}</option>
+              <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %} data-i18n-genre="{{ genre }}">{{ genre|title }}</option>
             {% endfor %}
           </select>
           <label for="awards" data-i18n="recognitionLabel">Recognition</label>
@@ -62,26 +72,10 @@
               <option value="{{ option }}" {% if per_page == option %}selected{% endif %}>{{ option }}</option>
             {% endfor %}
           </select>
-          <label for="language"><span aria-hidden="true">🌐</span> <span data-i18n="languageLabel">Language</span></label>
-          <select id="language" name="language" class="genre-filter" aria-label="Movie language">
-            <option value="" {% if not selected_language %}selected{% endif %} data-i18n="allLanguages">All languages</option>
-            {% if not language_metadata_available %}<option disabled data-i18n="noLanguageData">Language data unavailable</option>{% endif %}
-            {% for code, label in language_options %}
-              <option value="{{ code }}" {% if selected_language == code %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select>
-          <label for="age_rating" data-i18n="ageRatingLabel">Age rating</label>
-          <select id="age_rating" name="age_rating" class="genre-filter" aria-label="Age rating">
-            <option value="" {% if not selected_age_rating %}selected{% endif %} data-i18n="allRatings">All ratings</option>
-            {% if not age_rating_metadata_available %}<option disabled data-i18n="noRatingData">Rating data unavailable</option>{% endif %}
-            {% for rating in age_ratings %}
-              <option value="{{ rating }}" {% if selected_age_rating == rating %}selected{% endif %}>{{ rating }}</option>
-            {% endfor %}
-          </select>
         </div>
       </form>
       {% for conflict in filter_conflicts %}
-        <p class="filter-conflict">{{ conflict }}</p>
+        <p class="filter-conflict" data-i18n="{{ 'genreFilterConflict' if 'genre' in conflict else 'countryFilterConflict' }}">{{ conflict }}</p>
       {% endfor %}
       <p class="search__status" role="status" aria-live="polite"></p>
       <div class="search-feedback" aria-live="polite">
@@ -93,7 +87,7 @@
         {% if alternative_queries and assistant_state in ['empty', 'unmapped'] %}
           <ul class="search-alternatives">
             {% for alternative in alternative_queries[:3] %}
-              <li><a href="{{ url_for('index', q=alternative, per_page=per_page, genre=selected_genre, awards='winners' if award_filter else '', language=selected_language, age_rating=selected_age_rating) }}">{{ alternative }}</a></li>
+              <li><a href="{{ url_for('index', q=alternative, per_page=per_page, genre=selected_genre, awards='winners' if award_filter else '', language=selected_language) }}">{{ alternative }}</a></li>
             {% endfor %}
           </ul>
         {% endif %}
@@ -101,24 +95,24 @@
     </section>
 
     {% if debug_enabled and debug_view %}
-      <section class="debug-panel" aria-label="Query interpretation debug">
-        <h2>Query Debug</h2>
+      <section class="debug-panel" aria-label="Query interpretation debug" data-i18n-aria="queryDebug">
+        <h2 data-i18n="queryDebug">Query Debug</h2>
         <dl class="debug-grid">
-          <dt>User query</dt><dd>{{ debug_view.raw_query }}</dd>
-          <dt>Normalized</dt><dd>{{ debug_view.normalized_query }}</dd>
-          <dt>Detected intent</dt><dd>{{ debug_view.intent }}</dd>
-          <dt>Detected country</dt><dd>{{ debug_view.country }}</dd>
-          <dt>Detected genre</dt><dd>{{ debug_view.genres }}</dd>
-          <dt>Detected year</dt><dd>{{ debug_view.year }}</dd>
-          <dt>Negative filters</dt><dd>{{ debug_view.excluded_genres }}</dd>
-          <dt>Negative content</dt><dd>{{ debug_view.excluded_content_descriptors }}</dd>
-          <dt>Unsupported metadata</dt><dd>{{ debug_view.unsupported_filters or 'none' }}</dd>
-          <dt>Semantic description</dt><dd>{{ debug_view.semantic_description }}</dd>
-          <dt>Ranking</dt><dd>{{ debug_view.ranking_order }}</dd>
+          <dt data-i18n="userQuery">User query</dt><dd>{{ debug_view.raw_query }}</dd>
+          <dt data-i18n="normalized">Normalized</dt><dd>{{ debug_view.normalized_query }}</dd>
+          <dt data-i18n="detectedIntent">Detected intent</dt><dd>{{ debug_view.intent }}</dd>
+          <dt data-i18n="detectedCountry">Detected country</dt><dd>{{ debug_view.country }}</dd>
+          <dt data-i18n="detectedGenre">Detected genre</dt><dd>{{ debug_view.genres }}</dd>
+          <dt data-i18n="detectedYear">Detected year</dt><dd>{{ debug_view.year }}</dd>
+          <dt data-i18n="negativeFilters">Negative filters</dt><dd>{{ debug_view.excluded_genres }}</dd>
+          <dt data-i18n="negativeContent">Negative content</dt><dd>{{ debug_view.excluded_content_descriptors }}</dd>
+          <dt data-i18n="unsupportedMetadata">Unsupported metadata</dt><dd>{{ debug_view.unsupported_filters or 'none' }}</dd>
+          <dt data-i18n="semanticDescription">Semantic description</dt><dd>{{ debug_view.semantic_description }}</dd>
+          <dt data-i18n="ranking">Ranking</dt><dd>{{ debug_view.ranking_order }}</dd>
         </dl>
-        <h3>Structured Query</h3>
+        <h3 data-i18n="structuredQuery">Structured Query</h3>
         <pre>{{ debug_view.structured_json }}</pre>
-        <h3>Filter Results</h3>
+        <h3 data-i18n="filterResults">Filter Results</h3>
         {% if debug_view.filter_results %}
           <ul class="debug-filters">
             {% for name, status, detail in debug_view.filter_results %}
@@ -126,12 +120,12 @@
             {% endfor %}
           </ul>
         {% else %}
-          <p>No explicit metadata filters detected.</p>
+          <p data-i18n="noExplicitFilters">No explicit metadata filters detected.</p>
         {% endif %}
       </section>
     {% endif %}
 
-    <section class="results" aria-label="Movies">
+    <section class="results" aria-label="Movies" data-i18n-aria="moviesRegion">
         <div class="results__header">
           <h2 class="section-title" data-i18n="{{ 'recommendedMovies' if searched else 'allMovies' }}">{{ 'Recommended Movies' if searched else 'All Movies' }}</h2>
           <span class="results__count" data-result-count="{{ result_count }}" data-result-kind="{{ 'exact' if 'exact' in result_count_label else 'closest' if result_count_label else 'browse' }}">{{ result_count_label or (result_count ~ ' match' ~ ('' if result_count == 1 else 'es')) }}</span>
@@ -140,14 +134,16 @@
         {% if searched and results %}
           <div class="results__list">
             {% for r in results %}
-              <article class="movie-card">
+              <article class="movie-card{% if not movie_poster_url(r.movie) and not r.poster_exists %} movie-card--no-poster{% endif %}">
+                {% if movie_poster_url(r.movie) or r.poster_exists %}
                 <div class="movie-card__poster">
-                  {% if r.poster_exists %}
-                    <img src="{{ url_for('static', filename='images/' ~ r.movie.id ~ '.jpg') }}" alt="Poster for {{ r.movie.title }}" />
-                  {% else %}
-                    <span>Poster<br /><small>Add {{ r.movie.id }}.jpg</small></span>
+                  {% if movie_poster_url(r.movie) %}
+                    <img src="{{ movie_poster_url(r.movie) }}" alt="{{ r.movie.title }} poster" data-poster-title="{{ r.movie.title }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
+                  {% elif r.poster_exists %}
+                    <img src="{{ url_for('static', filename='images/' ~ r.movie.id ~ '.jpg') }}" alt="{{ r.movie.title }} poster" data-poster-title="{{ r.movie.title }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
                   {% endif %}
                 </div>
+                {% endif %}
                 <div>
                   <div class="movie-card__rank">#{{ r.rank }}</div>
                   <div class="match-badges">
@@ -156,6 +152,8 @@
                   </div>
                   <h3 class="movie-card__title">{{ r.movie.title }}</h3>
                   <div class="movie-card__meta">{{ r.genres_display }} · {{ r.movie.runtime }} min · {{ r.movie.release_year }}</div>
+                  <div class="movie-card__meta">{% if movie_origin_label(r.movie) %}<span data-i18n="originLabel">Origin</span>: {{ movie_origin_label(r.movie) }}{% else %}<span data-i18n="originUnavailable">Origin unavailable</span>{% endif %}</div>
+                  {% if r.movie.get('certification') %}<span class="movie-age-rating" data-i18n="contentRating">Age rating</span><span class="movie-age-rating__value">{{ r.movie.certification }}</span>{% endif %}
                   <p class="movie-card__match-reason">{{ r.match_reason }}</p>
                   {% if r.show_cast_evidence %}
                     <div class="cast-evidence cast-evidence--{{ r.cast_status.status }}">
@@ -187,17 +185,22 @@
           <div class="results__list">
             {% for item in movies %}
               {% set movie = item.movie %}
-              <article class="movie-card movie-card--browse">
+              <article class="movie-card movie-card--browse{% if not movie_poster_url(movie) and not item.poster_exists %} movie-card--no-poster{% endif %}">
+                {% if movie_poster_url(movie) or item.poster_exists %}
                 <div class="movie-card__poster">
-                  {% if item.poster_exists %}
-                    <img src="{{ url_for('static', filename='images/' ~ movie.id ~ '.jpg') }}" alt="Poster for {{ movie.title }}" />
-                  {% else %}
-                    <span>Poster<br /><small>Add {{ movie.id }}.jpg</small></span>
+                  {% if movie_poster_url(movie) %}
+                    <img src="{{ movie_poster_url(movie) }}" alt="{{ movie.title }} poster" data-poster-title="{{ movie.title }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
+                  {% elif item.poster_exists %}
+                    <img src="{{ url_for('static', filename='images/' ~ movie.id ~ '.jpg') }}" alt="{{ movie.title }} poster" data-poster-title="{{ movie.title }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
                   {% endif %}
                 </div>
+                {% endif %}
                 <div class="movie-card__content">
                   <h3 class="movie-card__title">{{ movie.title }}</h3>
-                  <div class="movie-card__meta">{{ movie.genres | map('title') | join(', ') }} · {{ movie.runtime }} min · {{ movie.release_year }} · {{ nationality_labels.get((movie.production_countries or movie.origin_regions or [movie.nationality])[0], movie.nationality or 'Unknown') }}</div>
+                  <div class="movie-card__meta">{{ movie.genres | map('title') | join(', ') }} · {{ movie.runtime }} min · {{ movie.release_year }}
+                    {% if movie_origin_label(movie) %} · <span data-i18n="originLabel">Origin</span>: {{ movie_origin_label(movie) }}{% else %} · <span data-i18n="originUnavailable">Origin unavailable</span>{% endif %}
+                  </div>
+                  {% if movie.get('certification') %}<span class="movie-age-rating" data-i18n="contentRating">Age rating</span><span class="movie-age-rating__value">{{ movie.certification }}</span>{% endif %}
                   {% if movie.get('average_rating') is not none %}
                     <div class="movie-card__meta">IMDb {{ '%.1f'|format(movie.average_rating) }}/10 · {{ '{:,}'.format(movie.vote_count) }} votes</div>
                   {% endif %}
@@ -216,13 +219,13 @@
           </div>
         {% endif %}
         {% if total_pages > 1 %}
-          <nav class="pagination" aria-label="Movie pages">
+          <nav class="pagination" aria-label="Movie pages" data-i18n-aria="paginationLabel">
             {% if page_number > 1 %}
-              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, awards='winners' if award_filter else '', per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '', language=selected_language, age_rating=selected_age_rating) }}">Previous</a>
+              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, awards='winners' if award_filter else '', per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '', language=selected_language) }}" data-i18n="previousPage">Previous</a>
             {% endif %}
-            <span>Page {{ page_number }} of {{ total_pages }}</span>
+            <span data-i18n-page data-current-page="{{ page_number }}" data-total-pages="{{ total_pages }}">Page {{ page_number }} of {{ total_pages }}</span>
             {% if page_number < total_pages %}
-              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, awards='winners' if award_filter else '', per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '', language=selected_language, age_rating=selected_age_rating) }}">Next</a>
+              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, awards='winners' if award_filter else '', per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '', language=selected_language) }}" data-i18n="nextPage">Next</a>
             {% endif %}
           </nav>
         {% endif %}
@@ -232,7 +235,7 @@
 
   <footer class="footer">
     <p>MOVIE_FINDER_GROUP4</p>
-    <p class="footer__attribution">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+    <p class="footer__attribution" data-i18n="footerAttribution">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
   </footer>
 
   <script src="{{ url_for('static', filename='js/smart-search.js') }}" defer></script>

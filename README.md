@@ -95,7 +95,7 @@ cast coverage.
 
 ```powershell
 $env:TMDB_API_KEY = "your_api_key"
-$env:TMDB_CATALOG_PATH = "data/popular_movies.json"
+$env:TMDB_CATALOG_PATH = "deployment"
 python data/enrich_cast.py
 # or:
 npm run enrich-cast
@@ -121,11 +121,11 @@ The classifier distinguishes between:
   or narrative metadata.
 
 The script also stores overview, tagline, TMDB keywords, runtime, original
-language, and a release certification when TMDB supplies them. `TMDB_CATALOG_PATH`
-is optional; use it to select a specific catalog instead of accidentally enriching
-a large local-only IMDb export. The compact `data/popular_movies.json` is the
-catalog deployed by the repository when `data/imdb_movies.json` is absent. The app
-merges matching rows from `data/movie_cast_enrichment.json` at startup.
+language, release certification, poster path, and production-country codes when
+TMDB supplies them. Set `TMDB_CATALOG_PATH=deployment` to enrich exactly the
+65 curated and 1,000 popular records served by Render; this avoids accidentally
+processing a large local-only IMDb export. The app merges matching rows from
+`data/movie_cast_enrichment.json` at startup.
 
 The app never claims the entire movie has no women: the current script stores at
 most 15 top-billed credits, which cannot prove absence from the full cast or film.
@@ -174,13 +174,13 @@ template, browser JavaScript, or committed source:
 | `OPENAI_MODEL` | Search LLM | `gpt-4o-mini` |
 | `OPENAI_EMBEDDING_MODEL` | Building/reading the optional embedding index | `text-embedding-3-small` |
 | `TMDB_API_KEY` | One-time catalog enrichment only | unset |
-| `TMDB_CATALOG_PATH` | Choosing input for `data/enrich_cast.py` | first available local catalog |
+| `TMDB_CATALOG_PATH` | Choosing input for `data/enrich_cast.py`; `deployment` selects the Render catalog | first available local catalog |
 
 For a compact Render data build, run from the project root before deploying:
 
 ```powershell
 $env:TMDB_API_KEY = "your_tmdb_key"
-$env:TMDB_CATALOG_PATH = "data/popular_movies.json"
+$env:TMDB_CATALOG_PATH = "deployment"
 python data/enrich_cast.py
 $env:OPENAI_API_KEY = "your_openai_key"
 python data/build_embeddings.py
@@ -212,18 +212,23 @@ and memory; the tracked compact catalog keeps that bounded.
 
 ### Interface filters and preferences
 
-Genre, Recognition, Per page, Language, and Age rating changes submit immediately;
-Enter submits the search without adding a newline. Language filtering uses the
-TMDB `original_language` field saved by `data/enrich_cast.py`, and age filtering
-uses TMDB release certification. If the deployed enrichment file has no values
-for either field, the filter remains available but the assistant explains why it
-cannot return verified records. Bundle an updated `data/movie_cast_enrichment.json`
-with the Render deployment after running enrichment.
+Genre, Recognition, Per page, and the single header Language control submit
+immediately; Enter submits the search without adding a newline. The header
+language selector also filters by TMDB `original_language` when that field is
+present. Its interface translations support English, Spanish, Tagalog, French,
+German, Portuguese, Japanese, Korean, Chinese, and Hindi. Movie titles and plot
+details remain in the catalog's original language.
 
-The header moon/sun control stores the selected theme in browser local storage.
-The interface-language control currently supports English and Spanish labels and
-assistant guidance; movie titles, synopses, and search results remain in their
-original catalog language.
+Age ratings are display-only metadata on individual movie cards; there is no age
+rating filter. The header moon/sun control stores the theme in browser local
+storage. TMDB certification, poster paths, and production countries are stored
+by `data/enrich_cast.py` when supplied by TMDB. Cards show a movie-specific TMDB
+poster and production origin only when those fields exist; IMDb `origin_regions`
+are release markets and are not presented as a film's production origin. Bundle
+an updated `data/movie_cast_enrichment.json` with the Render deployment after
+running enrichment. Without that file, cards omit unavailable posters, show
+"Origin unavailable", and omit certification rather than substituting a shared
+placeholder or a potentially misleading region.
 
 ### TMDB attribution and deployment notes
 

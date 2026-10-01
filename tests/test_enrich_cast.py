@@ -11,6 +11,13 @@ from data import enrich_cast
 
 
 class CastEnrichmentTests(unittest.TestCase):
+    def test_deployment_target_is_curated_plus_popular_catalog(self):
+        with patch.dict("os.environ", {"TMDB_CATALOG_PATH": "deployment"}):
+            catalog = enrich_cast.load_catalog()
+        self.assertEqual(len(catalog), 1065)
+        self.assertEqual(catalog[0]["id"], 1)
+        self.assertEqual(catalog[-1]["id"], 1065)
+
     def test_title_year_runtime_fallback_rejects_runtime_mismatch(self):
         movie = {"title": "Exact Title", "release_year": 2001, "runtime": 100}
         search_payload = {
@@ -44,6 +51,8 @@ class CastEnrichmentTests(unittest.TestCase):
             "tagline": "",
             "runtime": 106,
             "original_language": "en",
+            "poster_path": "/sample-poster.jpg",
+            "production_countries": [{"iso_3166_1": "GB"}, {"iso_3166_1": "US"}],
             "keywords": {"keywords": [{"name": "military"}]},
             "release_dates": {"results": []},
         }
@@ -78,6 +87,8 @@ class CastEnrichmentTests(unittest.TestCase):
             self.assertEqual(enriched[0]["synopsis"], details["overview"])
             self.assertEqual(enriched[0]["runtime"], details["runtime"])
             self.assertEqual(enriched[0]["original_language"], details["original_language"])
+            self.assertEqual(enriched[0]["poster_path"], details["poster_path"])
+            self.assertEqual(enriched[0]["production_countries"], ["GB", "US"])
             self.assertEqual(enriched[0]["keywords"], ["The Unit", "military"])
             self.assertEqual(report["enriched_records"], 1)
             self.assertEqual(len(report["top_five_evidence"]), 1)

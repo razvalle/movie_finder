@@ -6,9 +6,7 @@ def build_assistant_message(
     result_count,
     exact_count=0,
     selected_language="",
-    selected_rating="",
     language_available=True,
-    rating_available=True,
     genres=None,
     understood_terms=None,
     missing_requirements=None,
@@ -17,8 +15,6 @@ def build_assistant_message(
     absent = []
     if selected_language and not language_available:
         absent.append("language")
-    if selected_rating and not rating_available:
-        absent.append("age-rating")
     filter_note = "This catalog doesn't include " + " or ".join(absent) + " details yet. " if absent else ""
     if not query and absent:
         return "I can't apply that filter yet. " + filter_note.rstrip()

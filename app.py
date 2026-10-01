@@ -75,7 +75,6 @@ COMMON_LANGUAGE_LABELS = {
     "fr": "French", "hi": "Hindi", "it": "Italian", "ja": "Japanese",
     "ko": "Korean", "pt": "Portuguese", "ru": "Russian", "zh": "Chinese",
 }
-COMMON_AGE_RATINGS = ("G", "PG", "PG-13", "R", "NC-17")
 
 NATIONALITY_ALIASES = {
     "american": "US", "british": "GB", "english": "GB", "indian": "IN",
@@ -145,6 +144,21 @@ def poster_exists(movie):
     """Return whether the optional JPEG poster for a movie is installed."""
     poster_path = Path(app.static_folder) / "images" / f"{movie['id']}.jpg"
     return poster_path.is_file()
+
+
+def movie_poster_url(movie):
+    poster_path = movie.get("poster_path")
+    if isinstance(poster_path, str) and poster_path.startswith("/"):
+        return f"https://image.tmdb.org/t/p/w342{poster_path}"
+    return ""
+
+
+def movie_origin_label(movie):
+    countries = movie.get("production_countries") or []
+    if isinstance(countries, str):
+        countries = [countries]
+    labels = [COUNTRY_LABELS.get(code, code) for code in countries if isinstance(code, str) and code]
+    return ", ".join(dict.fromkeys(labels)) if labels else ""
 
 
 def movie_rank_key(movie):
@@ -396,7 +410,6 @@ def index():
     debug_enabled = request.args.get("debug", "").strip().lower() in {"1", "true", "yes"}
     selected_genre = request.args.get("genre", "").strip().lower()
     selected_language = request.args.get("language", "").strip().lower()
-    selected_age_rating = request.args.get("age_rating", "").strip().upper()
     selected_nationality = request.args.get("nationality", "").strip().upper()
     award_filter = request.args.get("awards", "").strip().lower() == "winners"
     initial_query = build_structured_query(query) if query else None
@@ -441,14 +454,6 @@ def index():
     movie_languages = language_options(MOVIES)
     available_languages = {str(movie.get("original_language") or "").strip().lower() for movie in MOVIES}
     available_languages.discard("")
-    age_ratings = sorted(set(COMMON_AGE_RATINGS) | {
-        str(movie.get("certification") or "").strip().upper()
-        for movie in MOVIES if str(movie.get("certification") or "").strip()
-    })
-    available_age_ratings = {
-        str(movie.get("certification") or "").strip().upper()
-        for movie in MOVIES if str(movie.get("certification") or "").strip()
-    }
     nationalities = sorted({
         code for movie in MOVIES for code in movie_country_codes(movie) if code
     })
@@ -476,8 +481,7 @@ def index():
     def matching_base_filters(movie):
         return (
             (not selected_genre or selected_genre in movie["genres"])
-            and (not selected_language or str(movie.get("original_language") or "").strip().lower() == selected_language)
-            and (not selected_age_rating or str(movie.get("certification") or "").strip().upper() == selected_age_rating)
+            and (not selected_language or not available_languages or str(movie.get("original_language") or "").strip().lower() == selected_language)
             and (not effective_nationality or effective_nationality in movie_country_codes(movie))
             and (not award_filter or movie.get("notable_awards"))
         )
@@ -529,11 +533,8 @@ def index():
         "query": query,
         "selected_genre": selected_genre,
         "selected_language": selected_language,
-        "selected_age_rating": selected_age_rating,
         "language_options": movie_languages,
-        "age_ratings": age_ratings,
         "language_metadata_available": bool(available_languages),
-        "age_rating_metadata_available": bool(available_age_ratings),
         "selected_nationality": effective_nationality,
         "award_filter": award_filter,
         "search_notice": search_notice,
@@ -546,6 +547,8 @@ def index():
         "genres": genres,
         "nationalities": nationalities,
         "nationality_labels": COUNTRY_LABELS,
+        "movie_origin_label": movie_origin_label,
+        "movie_poster_url": movie_poster_url,
         "per_page": per_page,
         "per_page_options": PER_PAGE_OPTIONS,
         "page_number": page_number,
@@ -565,7 +568,6 @@ def index():
     if not query:
         filter_metadata_missing = bool(
             selected_language and not available_languages
-            or selected_age_rating and not available_age_ratings
         )
         context["assistant_state"] = "unmapped" if filter_metadata_missing else ""
         if filter_metadata_missing:
@@ -574,9 +576,7 @@ def index():
             "",
             len(filtered_movies),
             selected_language=selected_language,
-            selected_rating=selected_age_rating,
             language_available=bool(available_languages),
-            rating_available=bool(available_age_ratings),
         )
 
     if query:
@@ -750,9 +750,7 @@ def index():
             len(all_results),
             exact_count=len(exact_results),
             selected_language=selected_language,
-            selected_rating=selected_age_rating,
             language_available=bool(available_languages),
-            rating_available=bool(available_age_ratings),
             genres=(understanding.get("genres") or query_preferences.get("genres", [])),
             understood_terms=understanding.get("keywords", []) or understanding.get("expanded_concepts", []),
             missing_requirements=missing_requirements,

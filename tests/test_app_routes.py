@@ -100,38 +100,91 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b"Academy Award", response.data)
         self.assertNotIn(b"Story 0009", response.data)
 
-    def test_language_and_age_rating_filters_apply_together(self):
+    def test_genre_recognition_and_language_filters_combine_and_rating_is_card_metadata(self):
         movies = [
             {
                 "id": 999991, "title": "English Film", "synopsis": "English record.",
                 "genres": ["drama"], "runtime": 90, "release_year": 2020,
                 "themes": [], "mood_tags": [], "keywords": [], "content_descriptors": [],
                 "original_language": "en", "certification": "PG", "average_rating": 7.0,
-                "vote_count": 100, "notable_awards": [], "origin_regions": ["US"], "nationality": "US",
+                "vote_count": 100, "notable_awards": ["Award"], "origin_regions": ["US"], "nationality": "US",
+                "production_countries": ["US"], "poster_path": "/english.jpg",
             },
             {
                 "id": 999992, "title": "Spanish Film", "synopsis": "Spanish record.",
                 "genres": ["drama"], "runtime": 90, "release_year": 2020,
                 "themes": [], "mood_tags": [], "keywords": [], "content_descriptors": [],
                 "original_language": "es", "certification": "R", "average_rating": 7.0,
-                "vote_count": 100, "notable_awards": [], "origin_regions": ["ES"], "nationality": "ES",
+                "vote_count": 100, "notable_awards": ["Award"], "origin_regions": ["ES"], "nationality": "ES",
+                "production_countries": ["GB"], "poster_path": "/spanish.jpg",
+            },
+            {
+                "id": 999993, "title": "Spanish Action Film", "synopsis": "Spanish action record.",
+                "genres": ["action"], "runtime": 90, "release_year": 2020,
+                "themes": [], "mood_tags": [], "keywords": [], "content_descriptors": [],
+                "original_language": "es", "certification": "R", "average_rating": 7.0,
+                "vote_count": 100, "notable_awards": ["Award"], "origin_regions": ["ES"], "nationality": "ES",
             },
         ]
         with patch("app.MOVIES", movies):
-            response = self.client.get("/?language=es&age_rating=R")
+            response = self.client.get("/?genre=drama&awards=winners&language=es&per_page=12")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Spanish Film", response.data)
         self.assertNotIn(b"English Film", response.data)
-        self.assertIn(b'value="es" selected', response.data)
-        self.assertIn(b'value="R" selected', response.data)
+        self.assertNotIn(b"Spanish Action Film", response.data)
+        self.assertIn(b'value="es" lang="es" selected', response.data)
+        self.assertIn(b"Age rating", response.data)
+        self.assertIn(b"<span class=\"movie-age-rating__value\">R</span>", response.data)
+        self.assertIn(b"United Kingdom", response.data)
+        self.assertIn(b"https://image.tmdb.org/t/p/w342/spanish.jpg", response.data)
 
     def test_manual_show_movies_button_is_removed_and_controls_exist(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertNotIn(b"Show Movies", response.data)
         self.assertIn(b'name="language"', response.data)
-        self.assertIn(b'name="age_rating"', response.data)
+        self.assertNotIn(b'name="age_rating"', response.data)
+        self.assertEqual(response.data.count(b'id="ui-language"'), 1)
+        self.assertNotIn(b'id="language"', response.data)
+        self.assertIn(b'value="tl" lang="tl"', response.data)
         self.assertIn(b'id="theme-toggle"', response.data)
+
+    def test_age_rating_never_filters_and_only_appears_per_movie(self):
+        movies = [
+            {
+                "id": 999994, "title": "PG Film", "synopsis": "PG record.", "genres": ["drama"],
+                "runtime": 90, "release_year": 2020, "themes": [], "mood_tags": [], "keywords": [],
+                "content_descriptors": [], "certification": "PG", "notable_awards": [],
+                "origin_regions": [], "average_rating": 7.0, "vote_count": 100,
+            },
+            {
+                "id": 999995, "title": "R Film", "synopsis": "R record.", "genres": ["drama"],
+                "runtime": 90, "release_year": 2020, "themes": [], "mood_tags": [], "keywords": [],
+                "content_descriptors": [], "certification": "R", "notable_awards": [],
+                "origin_regions": [], "average_rating": 7.0, "vote_count": 100,
+            },
+        ]
+        with patch("app.MOVIES", movies):
+            response = self.client.get("/?age_rating=R")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"PG Film", response.data)
+        self.assertIn(b"R Film", response.data)
+        self.assertIn(b'<span class="movie-age-rating__value">PG</span>', response.data)
+        self.assertIn(b'<span class="movie-age-rating__value">R</span>', response.data)
+        self.assertNotIn(b'name="age_rating"', response.data)
+
+    def test_release_regions_are_not_displayed_as_movie_origin(self):
+        movie = {
+            "id": 999996, "title": "Origin Unknown", "synopsis": "A drama.", "genres": ["drama"],
+            "runtime": 90, "release_year": 2020, "themes": [], "mood_tags": [], "keywords": [],
+            "content_descriptors": [], "origin_regions": ["AE"], "nationality": "AE",
+            "notable_awards": [], "average_rating": 7.0, "vote_count": 100,
+        }
+        with patch("app.MOVIES", [movie]):
+            response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Origin unavailable", response.data)
+        self.assertNotIn(b"United Arab Emirates", response.data)
 
     def test_unavailable_filter_offers_alternative_searches(self):
         response = self.client.get("/?language=es")

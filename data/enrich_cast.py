@@ -15,6 +15,7 @@ Run:
 from __future__ import annotations
 
 import csv
+import ast
 import hashlib
 import json
 import os
@@ -88,6 +89,16 @@ def request_json(url, api_key, retries=3):
 
 def load_catalog():
     configured_path = os.environ.get("TMDB_CATALOG_PATH", "").strip()
+    if configured_path.lower() in {"deployment", "render", "compact"}:
+        source = ast.parse((DATA_DIR / "movies.py").read_text(encoding="utf-8"))
+        assignment = next(
+            node for node in source.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "MOVIES" for target in node.targets)
+        )
+        curated = ast.literal_eval(assignment.value)
+        popular = json.loads((DATA_DIR / "popular_movies.json").read_text(encoding="utf-8"))
+        return [*curated, *popular]
     if configured_path:
         candidate = Path(configured_path)
         if not candidate.is_absolute():
@@ -298,6 +309,17 @@ def enrich_catalog():
         if isinstance(tmdb_runtime, int) and tmdb_runtime > 0:
             movie["runtime"] = tmdb_runtime
         movie["original_language"] = (details.get("original_language") or "").strip().lower()
+        poster_path = details.get("poster_path")
+        if isinstance(poster_path, str) and poster_path.startswith("/"):
+            movie["poster_path"] = poster_path
+        production_countries = [
+            country.get("iso_3166_1")
+            for country in details.get("production_countries", [])
+            if isinstance(country, dict) and country.get("iso_3166_1")
+        ]
+        if production_countries:
+            movie["production_countries"] = list(dict.fromkeys(production_countries))
+            movie["country_source"] = "TMDB production country"
         movie["certification"] = ""
         release_dates = details.get("release_dates") or {}
         if isinstance(release_dates, dict):

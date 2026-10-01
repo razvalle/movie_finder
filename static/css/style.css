@@ -542,6 +542,10 @@ body { background: var(--ink-950); color: var(--paper-100); }
 .match-badge { display: inline-block; border: 1px solid var(--ink-600); border-radius: 3px; padding: 0.12rem 0.4rem; color: var(--paper-100); font-size: 0.72rem; }
 .match-badge--full { border-color: var(--ok-green); }
 .match-badge--partial, .match-badge--unverified { border-color: var(--bad-red); }
+.movie-age-rating { display: inline-block; margin: 0.25rem 0.25rem 0.25rem 0; color: var(--paper-200); font-size: 0.72rem; }
+.movie-age-rating__value { display: inline-block; border: 1px solid var(--ink-600); border-radius: 3px; padding: 0.08rem 0.35rem; font-size: 0.72rem; }
+.movie-card--no-poster { grid-template-columns: 1fr; }
+.movie-card--browse.movie-card--no-poster { grid-template-columns: 1fr; }
 .chip { border-radius: 4px; }
 .footer { border-top: 1px solid var(--ink-700); }
 

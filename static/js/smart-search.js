@@ -5,13 +5,13 @@
   const button = form.querySelector(".search__button");
   const searchInput = form.querySelector("#q");
   const status = document.querySelector(".search__status");
-  const originalLabel = button.textContent;
   let timer = 0;
   let activeController = null;
   let requestVersion = 0;
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
+    const restoreLabel = button.textContent;
     window.clearTimeout(timer);
     activeController?.abort();
 
@@ -21,9 +21,9 @@
     const params = new URLSearchParams(new FormData(form, event.submitter));
     const url = `${form.action}?${params.toString()}`;
     button.disabled = true;
-    button.textContent = "Searching...";
+    button.textContent = window.movieFinderText?.("searchingButton") || "Searching...";
     form.setAttribute("aria-busy", "true");
-    status.textContent = "Searching movies...";
+    status.textContent = window.movieFinderText?.("searchingStatus") || "Searching movies...";
 
     timer = window.setTimeout(async () => {
       const timeout = window.setTimeout(() => controller.abort(), 8000);
@@ -58,7 +58,7 @@
       } catch (error) {
         if (version !== requestVersion) return;
         if (error.name === "AbortError") {
-          status.textContent = "Search took too long. Please try again.";
+          status.textContent = window.movieFinderText?.("searchSlow") || "Search took too long. Please try again.";
         } else {
           window.location.assign(url);
         }
@@ -66,7 +66,7 @@
         window.clearTimeout(timeout);
         if (version === requestVersion) {
           button.disabled = false;
-          button.textContent = originalLabel;
+          button.textContent = restoreLabel;
           form.removeAttribute("aria-busy");
           activeController = null;
         }
