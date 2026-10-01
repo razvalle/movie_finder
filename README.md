@@ -1,10 +1,10 @@
 # Movie Finder by Mood and Description (Python / Flask)
 
-Same project as the JS version, rebuilt in **pure Python**. The whole
-NLP pipeline, scoring, and rendering happen server-side with Flask —
-there is no client-side JavaScript anywhere in this app. Search is a
-plain HTML form that submits `?q=...` as a GET request; Flask
-re-renders the page with results computed fresh each time.
+Movie Finder is a Python 3 / Flask application using Jinja templates,
+plain HTML forms, and a small browser-side JavaScript enhancement. Search
+and ranking run on the server. The NLP stack combines local structured
+parsing, TF-IDF/BM25-style lexical retrieval, optional OpenAI embeddings,
+and optional JSON-only OpenAI query parsing and candidate verification.
 
 ```
 "I want something suspenseful but not horror, preferably a mystery under two hours."
@@ -86,6 +86,148 @@ TMDB has no overview. Because the catalog is large and TMDB rate limits API
 traffic, the complete enrichment can take a long time; stopping and rerunning
 the command resumes from the progress file.
 
+### Cast and gender verification
+
+The project also includes a conservative cast-verification pass for queries such
+as "no woman", "all-male cast", or "female lead". This uses TMDB credits as
+supporting evidence and never claims a movie has no women without enough billed-
+cast coverage.
+
+```powershell
+$env:TMDB_API_KEY = "your_api_key"
+$env:TMDB_CATALOG_PATH = "data/popular_movies.json"
+python data/enrich_cast.py
+# or:
+npm run enrich-cast
+```
+
+The script:
+- resolves TMDB ids via IMDb id when available;
+- falls back to exact normalized title + year + runtime (within five minutes)
+   when those fields are present, and flags ambiguous matches for review;
+- caches raw TMDB payloads on disk so reruns are cheap;
+- records ambiguous or unmatched movies in `data/tmdb_cast_review.csv`;
+- stores enriched records in `data/movie_cast_enrichment.json`; completed records
+   survive interrupted runs and are merged into the app catalog at startup;
+- writes `data/cast_coverage_report.json` with database-wide status totals and
+   five representative evidence records.
+
+The classifier distinguishes between:
+- strong: no women found in the available top-billed cast, high gender coverage,
+  and no female cues;
+- moderate: likely all-male but some genders are unknown;
+- weak/unknown: insufficient credits or incomplete data;
+- contradicted: any female cast or female-character cues appear in the billed cast
+  or narrative metadata.
+
+The script also stores overview, tagline, TMDB keywords, runtime, and a release
+certification when TMDB supplies them. `TMDB_CATALOG_PATH` is optional; use it to
+select a specific catalog instead of accidentally enriching a large local-only
+IMDb export. The compact `data/popular_movies.json` is the catalog deployed by
+the repository when `data/imdb_movies.json` is absent. The app merges matching
+rows from `data/movie_cast_enrichment.json` at startup.
+
+The app never claims the entire movie has no women: the current script stores at
+most 15 top-billed credits, which cannot prove absence from the full cast or film.
+Strong and moderate labels describe only the available credit evidence; weak and
+unknown results remain explicitly unverified.
+
+### Smart search outcomes
+
+`prompts/query_understanding_system.txt` parses positive and negative
+requirements, hard constraints, soft preferences, filters, verifiability, and
+language. `prompts/rerank_system.txt` verifies up to 30 retrieved candidates in
+one batched JSON response against the original query and only the fields supplied
+from the local catalog. Both calls are schema-sanitized, cached in process for
+10 minutes, and rate-limited to 30 searches per client per minute. User queries
+are JSON data, not instructions. The API key is read server-side only.
+
+Retrieval merges lexical BM25/TF-IDF, optional precomputed movie embeddings, and
+title hints using Reciprocal Rank Fusion. Stopwords and negated concepts are
+removed from lexical terms; if retrieval has no useful signal, the app returns
+no close matches instead of substituting popular titles. A result is labeled
+`Exact match` only when the verifier reports all hard requirements as verified.
+Otherwise it is shown as a `Closest match`, with unverified data called out.
+When the LLM is unavailable, the UI says so and uses basic retrieval; it does not
+silently present basic results as verified. When no candidates are available,
+the UI offers three parser-generated alternatives, or deterministic general
+alternatives if the parser is unavailable.
+
+The local catalog in this workspace currently loads 404,553 IMDb records from a
+gitignored `data/imdb_movies.json`: all have a `synopsis` and `keywords`, 326,138
+have a runtime, and none currently have TMDB `overview`, cast, tagline, or
+certification because `data/movie_cast_enrichment.json` is absent. The deployed
+tracked catalog is the compact popular set plus curated records; IMDb bulk data
+does not provide plot or cast metadata. Therefore requests that depend on absent
+or partial fields (for example, proving there are no women or no violence) can
+only be partial/unverified until enrichment is bundled, and some negative claims
+remain impossible to prove even with top-billed cast enrichment.
+
+### Environment and deployment
+
+Set these values in the Render dashboard under **Environment**, never in the
+template, browser JavaScript, or committed source:
+
+| Variable | Required for | Default |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | Query parsing, batched verification, and query embeddings | unset; basic-search fallback |
+| `OPENAI_MODEL` | Search LLM | `gpt-4o-mini` |
+| `OPENAI_EMBEDDING_MODEL` | Building/reading the optional embedding index | `text-embedding-3-small` |
+| `TMDB_API_KEY` | One-time catalog enrichment only | unset |
+| `TMDB_CATALOG_PATH` | Choosing input for `data/enrich_cast.py` | first available local catalog |
+
+For a compact Render data build, run from the project root before deploying:
+
+```powershell
+$env:TMDB_API_KEY = "your_tmdb_key"
+$env:TMDB_CATALOG_PATH = "data/popular_movies.json"
+python data/enrich_cast.py
+$env:OPENAI_API_KEY = "your_openai_key"
+python data/build_embeddings.py
+```
+
+Bundle `data/movie_cast_enrichment.json` and `data/movie_embeddings.json.gz`
+with the deployment when you want those offline indexes available at runtime.
+Re-run enrichment when the catalog changes; rerun `data/build_embeddings.py`
+after changing searchable fields or the embedding model. The Render service
+continues to use the existing `render.yaml` build/start commands. Add the OpenAI
+key in Render only if live query parsing/verification is desired; TMDB is not
+called by the deployed request path.
+
+**Latency and cost:** the app makes at most one short parse call and one batched
+verification call per uncached query; each request currently times out after
+2.2 seconds. Optional query embedding is another request. In-memory caching is
+per worker, so repeated queries in one worker are much cheaper than cold queries.
+Per-search cost varies with the model and candidate metadata; estimate it as
+`(input_tokens * input_price + output_tokens * output_price) / 1,000,000` using
+the provider's current prices. A small model and a 30-record batch keep the
+typical request inexpensive, while long overviews increase both tokens and
+latency. Embeddings cost money once during indexing and consume deployment disk
+and memory; the tracked compact catalog keeps that bounded.
+
+**Next improvements:**
+- Add curated violence/romance and character-presence annotations with provenance.
+- Move query/verifier caches and rate limits to shared Redis for multi-worker Render.
+- Add offline relevance and calibration evaluations with a labeled query set.
+
+### TMDB attribution and deployment notes
+
+The project uses TMDB as a metadata source for enrichment, not as a substitute
+for local catalog ownership. Include this attribution wherever the enriched
+metadata is presented: "This product uses the TMDB API but is not endorsed or
+certified by TMDB." The app can be deployed to Render without a TMDB key when
+pre-enriched data is bundled; set `TMDB_API_KEY` only when running enrichment.
+The raw-response cache is optional and should not be committed by default.
+
+### Known limitations
+
+- TMDB credit data can be missing, incomplete, or inconsistent for smaller films.
+- Some voice-only, animated, and documentary cases require human review.
+- The verifier covers at most the top 15 billed cast records. It does not
+   establish who appears in every scene or prove that a movie contains no women.
+- Low coverage and ambiguous cast data are shown as "Unverified" rather than a
+   strong claim.
+
 VS Code will also detect `app.py` as a Flask entry point if you use the
 Run and Debug panel (Run → Start Debugging → Python File).
 
@@ -100,8 +242,7 @@ mocking) and prints a pass/fail report, then writes the full table to
 `tests/test_report.md` with: user input, extracted preferences, top
 result, pass/fail, reason for failure, and a suggested improvement.
 
-Current result: **22/23 passing**. The one documented failure (`V1`) is
-a known limitation — see "Known limitations" below.
+Current result: **51/51 passing**.
 
 ### Structured search regression tests
 
@@ -242,13 +383,8 @@ data-driven and don't hard-code any movie.
 
 ## Known limitations
 
-- **Retroactive negation** ("horror movies are not what I want") isn't
-  caught — the negation module only scopes *forward* from a cue word,
-  which covers the overwhelming majority of natural phrasing ("not
-  horror", "no scary movies") but not sentences where the negated word
-  comes *before* "not". See `tests/test_report.md`, case `V1`.
-- **Tagalog-only negation cues** ("walang", "huwag") aren't recognized —
-  only English negation cues are implemented.
+- **Tagalog negation coverage** is limited to a small set of Taglish cues;
+   other Tagalog-only phrasing may not be recognized.
 - Runtime phrases with two numbers but only one stated unit (e.g. "at
   least 100 minutes but not longer than 150") only pick up the first
   fully-qualified constraint found.

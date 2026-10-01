@@ -12,6 +12,7 @@ STOPWORDS = {
     # English function words / filler verbs that carry no matching signal.
     "a", "an", "the", "of", "to", "in", "on", "for", "and", "or", "with",
     "is", "it", "at", "by", "as", "be", "this", "that", "than", "then",
+    "where", "there", "here", "when", "what", "which", "who", "why", "how",
     "i", "you", "we", "me", "my", "your", "im", "id", "ive", "ill",
     "want", "wants", "wanting", "give", "show", "recommend", "please",
     "something", "someone", "just", "also", "can", "could", "would",

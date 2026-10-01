@@ -1,0 +1,7 @@
+{
+  "name": "movie-finder-group4",
+  "private": true,
+  "scripts": {
+    "enrich-cast": "python data/enrich_cast.py"
+  }
+}

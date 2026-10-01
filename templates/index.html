@@ -100,7 +100,7 @@
     <section class="results" aria-label="Movies">
         <div class="results__header">
           <h2 class="section-title">{{ 'Recommended Movies' if searched else 'All Movies' }}</h2>
-          <span class="results__count">{{ result_count }} match{{ '' if result_count == 1 else 'es' }}</span>
+          <span class="results__count">{{ result_count_label or (result_count ~ ' match' ~ ('' if result_count == 1 else 'es')) }}</span>
         </div>
 
         {% if searched and results %}
@@ -116,9 +116,20 @@
                 </div>
                 <div>
                   <div class="movie-card__rank">#{{ r.rank }}</div>
+                  <div class="match-badges">
+                    <span class="match-badge match-badge--{{ r.match_level }}">{{ r.match_badge }}</span>
+                    {% if r.show_unverified_badge %}<span class="match-badge match-badge--unverified">Unverified</span>{% endif %}
+                  </div>
                   <h3 class="movie-card__title">{{ r.movie.title }}</h3>
                   <div class="movie-card__meta">{{ r.genres_display }} · {{ r.movie.runtime }} min · {{ r.movie.release_year }}</div>
                   <p class="movie-card__match-reason">{{ r.match_reason }}</p>
+                  {% if r.show_cast_evidence %}
+                    <div class="cast-evidence cast-evidence--{{ r.cast_status.status }}">
+                      <strong class="cast-evidence__badge">{{ r.cast_badge }}</strong>
+                      <p>{{ r.cast_status.reason }}</p>
+                      <small>{{ r.cast_evidence.evidence_line }}</small>
+                    </div>
+                  {% endif %}
                   {% if r.movie.get('average_rating') is not none %}
                     <div class="movie-card__meta">IMDb {{ '%.1f'|format(r.movie.average_rating) }}/10 · {{ '{:,}'.format(r.movie.vote_count) }} votes</div>
                   {% endif %}
@@ -187,6 +198,7 @@
 
   <footer class="footer">
     <p>MOVIE_FINDER_GROUP4</p>
+    <p class="footer__attribution">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
   </footer>
 
   <script src="{{ url_for('static', filename='js/smart-search.js') }}" defer></script>

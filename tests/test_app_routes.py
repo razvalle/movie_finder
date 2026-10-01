@@ -8,6 +8,7 @@ import sys
 import unittest
 import re
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -35,12 +36,13 @@ class SearchRouteTests(unittest.TestCase):
         ]
         self.assertEqual(failures, [])
 
-    def test_title_overrides_stale_filters(self):
+    def test_explicit_genre_filter_overrides_title_query(self):
         response = self.client.get(
             "/?q=recommend+the+grand+budapest+hotel&genre=action&nationality=CA&per_page=12"
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"The Grand Budapest Hotel", response.data)
+        self.assertIn(b'value="action" selected', response.data)
+        self.assertNotIn(b"The Grand Budapest Hotel", response.data)
 
     def test_country_overrides_stale_origin(self):
         response = self.client.get("/?q=movies+from+cabo+verde&nationality=IN&per_page=12&debug=1")
@@ -48,11 +50,11 @@ class SearchRouteTests(unittest.TestCase):
         self.assertNotIn(b'id="nationality"', response.data)
         self.assertIn(b"Detected country</dt><dd>Cabo Verde", response.data)
 
-    def test_query_genre_overrides_stale_dropdown(self):
+    def test_explicit_genre_filter_overrides_query_genre(self):
         response = self.client.get("/?q=japanese+horror+movies&genre=action&per_page=12")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"The genre in your search overrides", response.data)
-        self.assertNotIn(b'value="action" selected', response.data)
+        self.assertIn(b"The selected genre filter overrides", response.data)
+        self.assertIn(b'value="action" selected', response.data)
 
     def test_country_genre_and_human_input_routes(self):
         cases = [
@@ -60,7 +62,7 @@ class SearchRouteTests(unittest.TestCase):
             ("/?q=a+detective+solving+a+murder+in+a+mansion&per_page=12", b"Recommended Movies"),
             ("/?q=scarry+rom+com+but+no+sad+ending+under+two+hours&per_page=12", b"Recommended Movies"),
             ("/?q=recommend+a+canadian+movie+called+incendies&per_page=12", b"Incendies"),
-            ("/?q=zzzzunknownword&per_page=12", b"No close matches found; showing popular titles instead."),
+            ("/?q=zzzzunknownword&per_page=12", b"No close matches found"),
         ]
         for url, marker in cases:
             with self.subTest(url=url):
@@ -97,6 +99,71 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b'value="winners" selected', response.data)
         self.assertIn(b"Academy Award", response.data)
         self.assertNotIn(b"Story 0009", response.data)
+
+    def test_negated_query_does_not_match_on_generic_title_words(self):
+        response = self.client.get("/?q=a+movie+where+there+is+no+woman&per_page=12")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"We couldn&#39;t find a movie that exactly matches your request", response.data)
+        self.assertIn(b"30 closest matches", response.data)
+        self.assertIn(b"Unverified", response.data)
+        self.assertIn(b"MOVIE_FINDER_GROUP4", response.data)
+        self.assertIn(b"not endorsed or certified by TMDB", response.data)
+        self.assertNotIn(b"Where There Is Life", response.data)
+        self.assertNotIn(b"There Will Be Blood", response.data)
+        self.assertNotIn(b"There's Something About Mary", response.data)
+        self.assertNotIn(b"Related to there", response.data)
+
+    def test_no_women_query_shows_conflicting_alternative_when_none_pass(self):
+        movie = {
+            "id": 999999,
+            "title": "Contradicted Film",
+            "synopsis": "A woman leads a family through danger.",
+            "genres": ["drama"],
+            "runtime": 100,
+            "release_year": 2020,
+            "themes": [],
+            "mood_tags": [],
+            "keywords": ["family"],
+            "content_descriptors": [],
+            "average_rating": 7.0,
+            "vote_count": 1000,
+            "notable_awards": [],
+            "origin_regions": [],
+        }
+        with patch("app.MOVIES", [movie]):
+            response = self.client.get("/?q=a+movie+where+there+is+no+woman&per_page=12")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"0 closest matches", response.data)
+        self.assertNotIn(b"Contradicted Film", response.data)
+
+    def test_female_lead_query_renders_positive_cast_evidence(self):
+        movie = {
+            "id": 999998,
+            "title": "The Lead",
+            "synopsis": "A detective investigates a theft.",
+            "genres": ["drama"],
+            "runtime": 100,
+            "release_year": 2020,
+            "themes": [],
+            "mood_tags": [],
+            "keywords": ["detective"],
+            "content_descriptors": [],
+            "average_rating": 7.0,
+            "vote_count": 1000,
+            "notable_awards": [],
+            "origin_regions": [],
+            "cast": [
+                {"name": "Avery", "character": "Lead", "gender": 1},
+                {"name": "Blake", "character": "Detective", "gender": 2},
+                {"name": "Casey", "character": "Witness", "gender": 2},
+            ],
+        }
+        with patch("app.MOVIES", [movie]):
+            response = self.client.get("/?q=a+movie+with+a+female+lead&per_page=12")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"The Lead", response.data)
+        self.assertIn(b"Evidence found", response.data)
+        self.assertNotIn(b"Contradicted</strong>", response.data)
 
     def test_popular_fallback_contains_real_high_vote_titles(self):
         self.assertEqual(len(GENERATED_MOVIES), 1000)

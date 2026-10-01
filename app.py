@@ -34,7 +34,8 @@ from nlp.query import build_structured_query, detect_country
 from nlp.tfidf import load_or_build_tfidf_model
 from nlp.scoring import is_excluded, rank_movies
 from nlp.explain import explain_match, title_case
-from nlp.smart_search import allow_search, understand_query, retrieve_candidates, rerank_candidates
+from nlp.smart_search import MAX_CANDIDATES, allow_search, understand_query, retrieve_candidates, rerank_candidates
+from nlp.cast_verification import classify_cast_gender, evaluate_cast_constraint
 
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
@@ -63,6 +64,11 @@ EXAMPLE_QUERIES = [
 ]
 PER_PAGE_OPTIONS = (12, 24, 48)
 DEFAULT_PER_PAGE = 12
+DEFAULT_ALTERNATIVE_QUERIES = [
+    "popular comedy movies",
+    "highly rated science fiction movies",
+    "mystery movies with an investigation",
+]
 
 NATIONALITY_ALIASES = {
     "american": "US", "british": "GB", "english": "GB", "indian": "IN",
@@ -161,6 +167,7 @@ def build_debug_view(query_analysis, preferences, filtered_count, result_count):
             normalized,
         )
     release_year = preferences["release_year"] or {"min": None, "max": None}
+    cast_constraint = preferences.get("cast_gender")
     structured = {
         "country": COUNTRY_LABELS.get(country, None) if country else None,
         "genres": [title_case(genre) for genre in preferences["genres"]],
@@ -173,6 +180,7 @@ def build_debug_view(query_analysis, preferences, filtered_count, result_count):
         "semantic_description": query_analysis["semantic_description"] or None,
         "people": query_analysis["people"] or None,
         "languages": query_analysis["languages"] or None,
+        "cast_gender": cast_constraint,
     }
     filter_results = []
     if country:
@@ -185,6 +193,8 @@ def build_debug_view(query_analysis, preferences, filtered_count, result_count):
         filter_results.append(("Exclusions", "PASS", ", ".join(title_case(genre) for genre in preferences["excluded_genres"])))
     if preferences.get("excluded_content_descriptors"):
         filter_results.append(("Content exclusions", "PASS", ", ".join(preferences["excluded_content_descriptors"])))
+    if preferences.get("cast_gender"):
+        filter_results.append(("Cast gender", "PASS", str(preferences["cast_gender"])))
     ranking = query_analysis["ranking_intent"]
     ranking_order = "Relevance"
     if ranking == "best":
@@ -229,6 +239,14 @@ def movie_matches_release_year(movie, constraint):
     )
 
 
+GENERIC_TITLE_TOKENS = {
+    "where", "there", "here", "when", "what", "which", "who", "why", "how",
+    "movie", "movies", "film", "films", "is", "are", "was", "were", "am",
+    "be", "been", "being", "a", "an", "the", "do", "does", "did",
+    "have", "has", "had", "would", "could", "should",
+}
+
+
 def find_title_matches(query, movies):
     """Find titles written exactly or as a phrase inside a natural-language query."""
     normalized_query = normalize_text(query).replace(",", " ")
@@ -236,7 +254,12 @@ def find_title_matches(query, movies):
     if exact_matches:
         allowed_ids = {movie["id"] for movie in movies}
         return [movie for movie in exact_matches if movie["id"] in allowed_ids]
-    query_tokens = [token for token in normalized_query.split() if len(token) >= 4]
+    if re.search(r"\b(?:no|not|without|except|excluding|avoid|avoiding|skip|never)\b", normalized_query):
+        return []
+    query_tokens = [
+        token for token in normalized_query.split()
+        if len(token) >= 4 and token not in GENERIC_TITLE_TOKENS
+    ]
     candidate_lists = [TITLE_TOKEN_INDEX[token] for token in query_tokens if token in TITLE_TOKEN_INDEX]
     if not candidate_lists:
         return []
@@ -280,6 +303,18 @@ def is_exact_title_query(query, title_matches):
     normalized_query = normalize_text(query).replace(",", " ").strip()
     return any(normalized_query == normalize_text(movie["title"]).replace(",", " ").strip()
                for movie in title_matches)
+
+
+def has_unsupported_negated_requirement(query):
+    """Return True when a negated descriptor cannot be verified by the catalog data."""
+    if not query:
+        return False
+    normalized = normalize_text(query).replace(",", " ")
+    return bool(re.search(
+        r"\b(?:no|not|without|except|excluding|avoid|avoiding|skip|never)\b.*\b(?:woman|women|female|male|man|men|girl|girls|boy|boys|wife|husband|mother|father|child|children)\b",
+        normalized,
+        flags=re.IGNORECASE,
+    ))
 
 
 def build_preference_tags(preferences, excluded_count):
@@ -356,8 +391,7 @@ def index():
     query_preferences = query_analysis["preferences"] if query_analysis else None
     if query_preferences and query_preferences["genres"]:
         if selected_genre and selected_genre not in query_preferences["genres"]:
-            filter_conflicts.append("The genre in your search overrides the genre menu selection.")
-        selected_genre = ""
+            filter_conflicts.append("The selected genre filter overrides the genre in your search.")
     specific_title_matches = [
         movie for movie in query_title_matches
         if normalize_text(movie["title"]).strip() not in {"movie", "movies", "film", "films"}
@@ -369,10 +403,8 @@ def index():
         query_preferences["release_year"],
     ))
     if title_only_intent:
-        selected_genre = ""
-        effective_nationality = ""
-    if detected_nationality and query_preferences and not query_preferences["genres"]:
-        selected_genre = ""
+        if not selected_genre:
+            effective_nationality = ""
     understanding = understand_query(query) if query else None
     try:
         per_page = int(request.args.get("per_page", DEFAULT_PER_PAGE))
@@ -390,7 +422,9 @@ def index():
     })
     llm_year_range = understanding["year_range"] if understanding else {}
     llm_min_rating = understanding["min_rating"] if understanding else None
-    query_genres = list(query_preferences["genres"]) if query_preferences else []
+    query_genres = [] if selected_genre else (list(query_preferences["genres"]) if query_preferences else [])
+    if selected_genre and query_preferences:
+        query_preferences["genres"] = [selected_genre]
     if query_preferences and understanding:
         if not query_genres and not selected_genre:
             query_genres = [genre for genre in understanding["genres"] if genre in genres]
@@ -416,12 +450,14 @@ def index():
 
     base_movies = [movie for movie in MOVIES if matching_base_filters(movie)]
 
-    def search_pool(include_genres=True, include_year=True, include_rating=True):
+    def search_pool(include_genres=True, include_year=True, include_rating=True, include_cast=True):
         pool = []
         for movie in base_movies:
             if include_genres and query_genres and not any(genre in movie["genres"] for genre in query_genres):
                 continue
             if query_preferences and is_excluded(movie, query_preferences):
+                continue
+            if include_cast and query_preferences and query_preferences.get("cast_gender") and not evaluate_cast_constraint(movie, query_preferences["cast_gender"]):
                 continue
             if include_year and not movie_matches_release_year(movie, year_constraint):
                 continue
@@ -447,6 +483,13 @@ def index():
             filtered_movies = search_pool(include_genres=False, include_year=False, include_rating=False)
             if filtered_movies:
                 search_notice = "Showing closest matches; descriptive filters were relaxed."
+        if not filtered_movies and query_preferences and query_preferences.get("cast_gender"):
+            filtered_movies = search_pool(
+                include_genres=False,
+                include_year=False,
+                include_rating=False,
+                include_cast=False,
+            )
 
     context = {
         "query": query,
@@ -471,6 +514,7 @@ def index():
         "movies": [],
         "searched": False,
         "result_count": len(filtered_movies),
+        "result_count_label": "",
         "query_debug": query_analysis["debug"] if query_analysis else {},
         "debug_enabled": debug_enabled,
         "debug_view": None,
@@ -478,7 +522,26 @@ def index():
 
     if query:
         preferences = query_preferences
+        cast_constraint = preferences.get("cast_gender")
+        negative_cast_constraint = bool(
+            cast_constraint
+            and (cast_constraint.get("exclude") == "female" or cast_constraint.get("require") == "all_male")
+        )
         QUERY_LOGGER.info("interpreted_query=%s", query_analysis["debug"])
+        if has_unsupported_negated_requirement(query) and not query_preferences.get("cast_gender"):
+            context.update({
+                "searched": True,
+                "result_count": 0,
+                "result_count_label": "0 closest matches",
+                "results": [],
+                "search_notice": "No close matches found. This catalog cannot verify strict gender-based negatives such as 'no woman', so no movie can be confirmed as a true match.",
+                "alternative_queries": [
+                    "movies with women",
+                    "movies featuring a strong female lead",
+                    "popular dramas and comedies",
+                ],
+            })
+            return render_template("index.html", **context)
         normalized_query = normalize_text(nationality_query).replace(",", " ").strip()
         exact_title_exists = normalized_query in TITLE_INDEX
         nationality_only = detected_nationality and not title_only_intent and not exact_title_exists and not any((
@@ -501,15 +564,30 @@ def index():
             ranking_preferences["moods"] = []
             ranking_preferences["themes"] = []
         candidates = retrieve_candidates(query, understanding, search_movies, TFIDF_MODEL)
-        if candidates and all(item.get("fallback_only") for item in candidates):
-            if not search_notice:
-                search_notice = "No close matches found; showing popular titles instead."
-            context["search_notice"] = search_notice
-            context["alternative_queries"] = understanding["alternative_queries"] or [
-                "popular " + (understanding["core_intent"] or "movies"),
-                "movies with " + ", ".join(understanding["keywords"][:3]),
-            ]
-        candidates = rerank_candidates(query, candidates)
+        has_structured_constraint = bool(query_preferences and (
+            query_preferences.get("cast_gender")
+            or query_preferences.get("excluded_genres")
+            or query_preferences.get("excluded_content_descriptors")
+            or query_preferences.get("release_year")
+            or query_preferences.get("runtime", {}).get("min")
+            or query_preferences.get("runtime", {}).get("max")
+        )) or bool(understanding.get("hard_constraints"))
+        if not candidates and has_structured_constraint and filtered_movies:
+            eligible_closest = filtered_movies
+            if negative_cast_constraint:
+                eligible_closest = [
+                    movie for movie in filtered_movies
+                    if evaluate_cast_constraint(movie, cast_constraint)
+                ]
+            closest_movies = heapq.nlargest(MAX_CANDIDATES, eligible_closest, key=movie_rank_key)
+            candidates = [{
+                "movie": movie,
+                "search_score": 0,
+                "match_reason": "No direct plot evidence was found; shown as an unverified alternative.",
+                "relevance_score": None,
+                "fallback_only": True,
+            } for movie in closest_movies]
+        candidates = rerank_candidates(query, candidates, understanding)
         candidate_movies = [item["movie"] for item in candidates]
         scoring_preferences = dict(ranking_preferences)
         scoring_preferences["free_text_keywords"] = []
@@ -522,12 +600,27 @@ def index():
         for entry in all_results:
             candidate = candidate_by_id[str(entry["movie"]["id"])]
             entry["match_reason"] = candidate["match_reason"]
+            entry["match_level"] = candidate.get("match_level", "partial")
+            entry["satisfied"] = candidate.get("satisfied", [])
+            entry["unsatisfied"] = candidate.get("unsatisfied", [])
+            entry["unverifiable"] = candidate.get("unverifiable", [])
+            entry["confidence"] = candidate.get("confidence", 0)
+            entry["verification_fallback"] = candidate.get("verification_fallback", False)
             popularity = math.log1p(entry["movie"].get("vote_count", 0)) / math.log1p(max_votes) if max_votes else 0
             if candidate.get("final_score") is None:
                 candidate["final_score"] = candidate["search_score"] * 0.78 + entry["percent"] * 0.20
             entry["final_score"] = candidate["final_score"] + popularity * 2
-        all_results.sort(key=lambda entry: entry["final_score"], reverse=True)
-        if query_analysis["ranking_intent"]:
+        exact_results = [entry for entry in all_results if entry["match_level"] == "full"]
+        if exact_results:
+            all_results = exact_results
+            context["result_count_label"] = f"{len(all_results)} exact matches"
+        else:
+            all_results.sort(key=lambda entry: (
+                len(entry["satisfied"]), entry["confidence"], entry["movie"].get("average_rating") or 0,
+                entry["movie"].get("vote_count", 0),
+            ), reverse=True)
+            context["result_count_label"] = f"{len(all_results)} closest matches"
+        if exact_results and query_analysis["ranking_intent"]:
             all_results.sort(key=lambda entry: (
                 ranking_key(entry, query_analysis["ranking_intent"]), entry["final_score"]
             ), reverse=True)
@@ -539,6 +632,20 @@ def index():
         display_results = []
         for rank, entry in enumerate(results, start=1):
             movie = entry["movie"]
+            cast_status = classify_cast_gender(movie)
+            if cast_constraint and not negative_cast_constraint:
+                constraint_match = evaluate_cast_constraint(movie, cast_constraint)
+                cast_status = {
+                    **cast_status,
+                    "status": "strong" if constraint_match else "unknown",
+                    "badge": "Evidence found" if constraint_match else "Unverified",
+                    "reason": (
+                        "Available top-billed cast or narrative metadata supports this request."
+                        if constraint_match else
+                        "Available metadata does not verify this cast request."
+                    ),
+                    "contradicted": False,
+                }
             display_results.append({
                 "rank": rank,
                 "movie": movie,
@@ -547,8 +654,31 @@ def index():
                 "genres_display": ", ".join(title_case(g) for g in movie["genres"]),
                 "reasons": explain_match(movie, ranking_preferences, entry["breakdown"]),
                 "match_reason": entry["match_reason"],
+                "match_level": entry["match_level"],
+                "match_badge": "Exact match" if entry["match_level"] == "full" else "Closest match",
+                "show_unverified_badge": bool(entry["unverifiable"] or entry["verification_fallback"]),
+                "cast_status": cast_status,
+                "cast_badge": cast_status["badge"],
+                "cast_evidence": cast_status["evidence"],
+                "show_cast_evidence": bool(cast_constraint),
             })
 
+        if all_results and not exact_results:
+            relaxation_note = search_notice if "relaxed" in search_notice.lower() else ""
+            search_notice = "We couldn't find a movie that exactly matches your request. Here are the closest matches."
+            if negative_cast_constraint:
+                search_notice += " None of these are confirmed to have no female characters."
+            missing = list(dict.fromkeys(
+                item for entry in all_results
+                for item in entry["unsatisfied"] + entry["unverifiable"]
+            ))
+            if missing:
+                search_notice += " Missing or unverified: " + "; ".join(missing[:3]) + "."
+            if relaxation_note:
+                search_notice += " " + relaxation_note
+        if any(entry["verification_fallback"] for entry in all_results) or not understanding.get("llm_used"):
+            fallback_notice = "Smart matching is unavailable right now, showing basic results."
+            search_notice = f"{fallback_notice} {search_notice}" if search_notice else fallback_notice
         context.update({
             "preference_tags": build_preference_tags(ranking_preferences, ranking["excluded_count"]),
             "results": display_results,
@@ -557,15 +687,13 @@ def index():
             "page_number": page_number,
             "total_pages": total_pages,
             "debug_view": build_debug_view(query_analysis, ranking_preferences, len(filtered_movies), len(all_results)),
+            "search_notice": search_notice,
         })
         if not all_results:
-            alternatives = understanding["alternative_queries"] or [
-                "popular " + (understanding["core_intent"] or "movies"),
-                "movies with " + ", ".join(understanding["keywords"][:3]),
-            ]
-            context["alternative_queries"] = alternatives[:3]
-            if not search_notice:
-                search_notice = "No close matches found. Try one of these searches:"
+            context["result_count_label"] = "0 closest matches"
+            context["alternative_queries"] = understanding["alternative_queries"] or DEFAULT_ALTERNATIVE_QUERIES
+            if "No close matches found" not in search_notice:
+                search_notice = (search_notice + " " if search_notice else "") + "No close matches found. Try one of these searches:"
             context["search_notice"] = search_notice
     else:
         total_pages = max(1, math.ceil(len(filtered_movies) / per_page))

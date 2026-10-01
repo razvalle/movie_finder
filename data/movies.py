@@ -830,4 +830,16 @@ REAL_CATALOG_PATH = Path(__file__).with_name("imdb_movies.json")
 if REAL_CATALOG_PATH.is_file():
     MOVIES = json.loads(REAL_CATALOG_PATH.read_text(encoding="utf-8"))
 
+CAST_ENRICHMENT_PATH = Path(__file__).with_name("movie_cast_enrichment.json")
+if CAST_ENRICHMENT_PATH.is_file():
+    enriched_movies = json.loads(CAST_ENRICHMENT_PATH.read_text(encoding="utf-8"))
+    enrichment_by_key = {
+        str(movie.get("imdb_id") or f"id:{movie.get('id')}"): movie
+        for movie in enriched_movies
+    }
+    for movie in MOVIES:
+        enrichment_key = str(movie.get("imdb_id") or f"id:{movie.get('id')}")
+        if enrichment_key in enrichment_by_key:
+            movie.update(enrichment_by_key[enrichment_key])
+
 annotate_awards(MOVIES)

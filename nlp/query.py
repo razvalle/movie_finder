@@ -122,6 +122,23 @@ def detect_people_and_language(normalized_text):
     return people, languages
 
 
+def detect_cast_gender_constraint(normalized_text):
+    """Map explicit cast-gender requests to a structured, verifiable constraint."""
+    patterns = [
+        (r"\b(?:no|not|without|except|excluding|avoid|avoiding|skip|never)\b.*\b(?:woman|women|female|girls?|ladies?|females?)\b", {"type": "cast_gender", "exclude": "female"}),
+        (r"\b(?:all[- ]male|male[- ]only|only men|no men|all male cast|all[- ]male cast)\b", {"type": "cast_gender", "require": "all_male"}),
+        (r"\b(?:all[- ]female|female[- ]only|only women|all women|women only|all[- ]female cast)\b", {"type": "cast_gender", "require": "all_female"}),
+        (r"\b(?:female lead|woman lead|women lead|with a female lead|starring a woman|starring women)\b", {"type": "cast_gender", "require": "female_lead"}),
+        (r"\b(?:majority women|more women than men|mostly women|majority of the cast is women)\b", {"type": "cast_gender", "require": "majority_women"}),
+        (r"\b(?:at least one woman|one woman|a woman|women present|has women)\b", {"type": "cast_gender", "require": "at_least_one_woman"}),
+        (r"\b(?:no men|without men|no male|male characters only)\b", {"type": "cast_gender", "require": "no_men"}),
+    ]
+    for pattern, constraint in patterns:
+        if re.search(pattern, normalized_text, flags=re.IGNORECASE):
+            return constraint
+    return None
+
+
 def build_structured_query(raw_query, content_text=None):
     """Return the explicit filters, ranking intent, and semantic residual text."""
     normalized = normalize_text(raw_query).replace(",", " ")
@@ -131,6 +148,10 @@ def build_structured_query(raw_query, content_text=None):
     if content_text is not None:
         cleaned = content_text
     preferences = extract_preferences(cleaned)
+    cast_constraint = detect_cast_gender_constraint(normalized)
+    if cast_constraint:
+        preferences["cast_gender"] = cast_constraint
+        preferences["free_text_keywords"] = []
     preferences["free_text_keywords"] = [
         word for word in preferences["free_text_keywords"]
         if word not in EXPLICIT_SYNTAX_TOKENS
@@ -186,5 +207,6 @@ def build_structured_query(raw_query, content_text=None):
             "semantic_description": preferences["free_text_keywords"],
             "people": people,
             "languages": languages,
+            "cast_gender": preferences.get("cast_gender"),
         },
     }

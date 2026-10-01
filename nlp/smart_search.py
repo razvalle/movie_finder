@@ -113,6 +113,12 @@ STOP_WORDS = {
     "i", "in", "into", "is", "it", "me", "movie", "movies", "of", "on", "or",
     "please", "recommend", "show", "something", "that", "the", "this", "to", "want",
     "watch", "with", "film", "films", "who", "which", "would", "you", "less", "more",
+    "where", "there", "here", "when", "what", "why", "how", "was", "were", "am",
+    "are", "been", "being", "do", "does", "did", "have", "has", "had", "could",
+    "should", "would", "any", "some", "all", "none", "another", "no", "not",
+    "without", "except", "excluding", "avoid", "avoiding", "never", "must",
+    "only", "there", "thing", "things",
+    "ending", "end", "story",
 }
 
 
@@ -220,6 +226,16 @@ def sanitize_understanding(value, raw_query):
         "exclusions": _string_list(value.get("exclusions")),
         "language_detected": language[:12] if isinstance(language, str) else "en",
         "alternative_queries": _string_list(value.get("alternative_queries"), limit=3, length=160),
+        "positive_requirements": _string_list(value.get("positive_requirements")),
+        "negative_requirements": _string_list(value.get("negative_requirements")),
+        "hard_constraints": _string_list(value.get("hard_constraints")),
+        "soft_preferences": _string_list(value.get("soft_preferences")),
+        "verifiability": value.get("verifiability") if isinstance(value.get("verifiability"), str) and value.get("verifiability") in {
+            "verifiable", "partially_verifiable", "not_verifiable"
+        } else "partially_verifiable",
+        "verification_notes": value.get("verification_notes", "")[:500]
+        if isinstance(value.get("verification_notes"), str) else "",
+        "filters": _sanitize_filters(value.get("filters")),
         "llm_used": True,
     }
 
@@ -235,11 +251,36 @@ def _sanitize_genres(value):
     return cleaned
 
 
+def _sanitize_filters(value):
+    if not isinstance(value, dict):
+        value = {}
+    year_range = value.get("year_range")
+    if not isinstance(year_range, dict):
+        year_range = {}
+    min_rating = value.get("min_rating")
+    if isinstance(min_rating, bool) or not isinstance(min_rating, (int, float)) or not 0 <= min_rating <= 10:
+        min_rating = None
+    return {
+        "genres": _sanitize_genres(value.get("genres")),
+        "year_range": {"from": _year_value(year_range.get("from")), "to": _year_value(year_range.get("to"))},
+        "min_rating": float(min_rating) if min_rating is not None else None,
+    }
+
+
 def local_understanding(raw_query):
     """Deterministic query expansion used when no key is configured or API fails."""
     structured = build_structured_query(raw_query)
     preferences = structured["preferences"]
     keywords = list(preferences["free_text_keywords"])
+    no_twist_ending = bool(re.search(
+        r"\b(?:not|no|without|avoid|avoiding)\s+(?:a\s+|any\s+)?twist\b|\bending\s+(?:is\s+)?not\s+(?:a\s+)?twist\b",
+        normalize_text(raw_query),
+    ))
+    if no_twist_ending:
+        keywords = [keyword for keyword in keywords if keyword not in {"twist", "twisty"}]
+    animal_only = bool(re.search(r"\b(?:only|just)\s+animals?\b", normalize_text(raw_query)))
+    silent_request = bool(re.search(r"\bsilent(?:\s+(?:film|movie))?\b", normalize_text(raw_query)))
+    black_and_white_request = bool(re.search(r"\bblack\s+and\s+white\b|\bblack-and-white\b", normalize_text(raw_query)))
     concepts = []
     example_titles = []
     normalized = normalize_text(raw_query)
@@ -273,6 +314,32 @@ def local_understanding(raw_query):
         "exclusions": preferences["excluded_genres"] + preferences["excluded_moods"],
         "language_detected": "en",
         "alternative_queries": [],
+        "positive_requirements": keywords,
+        "negative_requirements": list(dict.fromkeys(
+            preferences["excluded_genres"] + preferences["excluded_moods"]
+            + preferences.get("excluded_content_descriptors", [])
+            + (["twist ending"] if no_twist_ending else [])
+        )),
+        "hard_constraints": list(dict.fromkeys(
+            ([f"cast constraint: {preferences['cast_gender']}"] if preferences.get("cast_gender") else [])
+            + (["release year"] if preferences.get("release_year") else [])
+            + [f"exclude {item}" for item in preferences["excluded_genres"]]
+            + [f"exclude {item}" for item in preferences.get("excluded_content_descriptors", [])]
+            + (["ending is not a twist"] if no_twist_ending else [])
+            + (["only animals"] if animal_only else [])
+            + (["silent film"] if silent_request else [])
+            + (["black-and-white"] if black_and_white_request else [])
+        )),
+        "soft_preferences": list(dict.fromkeys(preferences["moods"] + preferences["themes"])),
+        "verifiability": "partially_verifiable" if (
+            preferences.get("cast_gender") or no_twist_ending or animal_only or silent_request or black_and_white_request
+        ) else "verifiable",
+        "verification_notes": "Catalog fields include title, synopsis, genres, keywords, year, rating, and optional TMDB credits.",
+        "filters": {
+            "genres": preferences["genres"],
+            "year_range": {"from": year.get("min"), "to": year.get("max")},
+            "min_rating": None,
+        },
         "llm_used": False,
     }
 
@@ -291,10 +358,19 @@ def understand_query(raw_query):
 
 
 def _movie_text(movie):
+    cast = movie.get("cast", movie.get("actors", [])) or []
+    cast_text = []
+    for person in cast:
+        if isinstance(person, dict):
+            cast_text.extend((person.get("name", ""), person.get("character", "")))
+        elif isinstance(person, str):
+            cast_text.append(person)
     fields = [
-        movie.get("title", ""), movie.get("original_title", ""), movie.get("synopsis", ""),
-        " ".join(movie.get("genres", [])), " ".join(movie.get("keywords", [])),
-        " ".join(movie.get("cast", movie.get("actors", []))),
+        movie.get("title", ""), movie.get("original_title", ""),
+        movie.get("synopsis", ""), movie.get("overview", ""), movie.get("tagline", ""),
+        " ".join(str(genre) for genre in movie.get("genres", [])),
+        " ".join(str(keyword) for keyword in movie.get("keywords", [])),
+        " ".join(cast_text),
     ]
     return " ".join(field for field in fields if field)
 
@@ -331,18 +407,38 @@ def _get_bm25_index(movies):
 
 
 def _query_terms(raw_query, understanding):
-    sources = [raw_query, understanding["core_intent"], *understanding["keywords"],
+    sources = [_remove_negated_concepts(raw_query), _remove_negated_concepts(understanding["core_intent"]), *understanding["keywords"],
                *understanding["expanded_concepts"], *understanding["example_titles"]]
     if understanding["similar_to"]:
         sources.append(understanding["similar_to"])
     words = simple_word_tokens(" ".join(sources))
-    return [word for word in words if word not in STOP_WORDS]
+    return list(dict.fromkeys(
+        word for word in words
+        if word not in STOP_WORDS and len(word) > 1 and not re.fullmatch(r"(?:19|20)\d{2}", word)
+    ))
+
+
+def _remove_negated_concepts(text):
+    return re.sub(
+        r"\b(?:no|not|without|except|excluding|avoid|avoiding|never)\s+(?:any\s+|a\s+|an\s+|the\s+)?"
+        r"(?:woman|women|female|man|men|male|girl|girls|boy|boys|violence|violent|romance|romantic|twist|twisty)\b",
+        " ", normalize_text(text),
+    )
+
+
+def _raw_query_terms(raw_query):
+    return list(dict.fromkeys(
+        word for word in simple_word_tokens(_remove_negated_concepts(raw_query))
+        if word not in STOP_WORDS and len(word) > 1 and not re.fullmatch(r"(?:19|20)\d{2}", word)
+    ))
 
 
 def _fuzzy_terms(terms, vocabulary):
     expanded = set(terms)
+    vocabulary = list(vocabulary)
+    vocabulary_set = set(vocabulary)
     for term in set(terms):
-        if len(term) < 4 or term in vocabulary:
+        if len(term) < 4 or term in vocabulary_set:
             continue
         closest = None
         closest_ratio = 0.0
@@ -355,6 +451,26 @@ def _fuzzy_terms(terms, vocabulary):
         if closest and closest_ratio >= 0.78:
             expanded.add(closest)
     return expanded
+
+
+def _fuzzy_term_map(terms, vocabulary):
+    vocabulary = list(vocabulary)
+    vocabulary_set = set(vocabulary)
+    mapping = {}
+    for term in terms:
+        if term in vocabulary_set or len(term) < 4:
+            mapping[term] = term
+            continue
+        closest = None
+        closest_ratio = 0.0
+        for candidate in vocabulary:
+            if abs(len(term) - len(candidate)) > 2:
+                continue
+            ratio = SequenceMatcher(None, term, candidate).ratio()
+            if ratio > closest_ratio:
+                closest, closest_ratio = candidate, ratio
+        mapping[term] = closest if closest and closest_ratio >= 0.78 else term
+    return mapping
 
 
 def _bm25_scores(terms, index):
@@ -459,6 +575,7 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
     if not movies:
         return []
     terms = _query_terms(raw_query, understanding)
+    raw_terms = _raw_query_terms(raw_query)
     lexical_scores = {}
     if len(movies) <= 5000:
         lexical_index = _get_bm25_index(movies)
@@ -487,7 +604,7 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
     embeddings = _load_embeddings()
     query_embedding = None
     semantic_scores = {}
-    if embeddings:
+    if embeddings and raw_terms:
         query_embedding = _embedding_for_query(
             " ".join([understanding["core_intent"], *understanding["expanded_concepts"]])
         )
@@ -511,15 +628,20 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
             fused_scores[position] += weight / (60 + rank)
     fallback_only = not fused_scores
     if not fused_scores:
-        positions = sorted(
-            range(len(movies)),
-            key=lambda position: (
-                movies[position].get("vote_count", 0),
-                movies[position].get("average_rating") or 0,
-            ),
-            reverse=True,
-        )
-        fused_scores.update({position: 1 / (60 + rank) for rank, position in enumerate(positions, 1)})
+        return []
+
+    if len(raw_terms) >= 2:
+        vocabulary = lexical_index["vocabulary"] if len(movies) <= 5000 else tfidf_model["idf"].keys()
+        fuzzy_map = _fuzzy_term_map(raw_terms, vocabulary)
+        qualified = {}
+        for position, score in fused_scores.items():
+            movie_terms = set(simple_word_tokens(_movie_text(movies[position])))
+            matched_count = sum(1 for term in raw_terms if fuzzy_map[term] in movie_terms)
+            if matched_count / len(raw_terms) >= 0.65:
+                qualified[position] = score
+        fused_scores = qualified
+        if not fused_scores:
+            return []
 
     ordered = sorted(fused_scores, key=fused_scores.get, reverse=True)[:limit]
     max_score = max((fused_scores[position] for position in ordered), default=1.0) or 1.0
@@ -542,62 +664,210 @@ def _fallback_reason(movie, terms, understanding):
     searchable = set(simple_word_tokens(_movie_text(movie)))
     matched = [term for term in terms if term in searchable]
     if matched:
-        return "Related to " + ", ".join(dict.fromkeys(matched[:3])) + "."
+        return "The available synopsis or metadata overlaps with the description."
     if any(hint.casefold() in movie.get("title", "").casefold() for hint in understanding["example_titles"]):
         return "Matched a likely title hint from your description."
-    if movie.get("vote_count"):
-        return "Closest available match by title and movie popularity."
-    return "Closest available match to your description."
+    return "No direct plot evidence was found in the available metadata."
 
 
-def rerank_candidates(raw_query, candidates):
-    """Ask the model to re-rank one bounded candidate batch; fail open."""
+def _validated_reason(value):
+    if not isinstance(value, str):
+        return "Closest match based on the available movie details."
+    reason = value.strip()[:220]
+    if not reason or re.match(r"^(?:related to|matches? the (?:word|token)|because (?:the )?title contains)\b", reason, re.I):
+        return "Closest match based on the available movie details."
+    return reason
+
+
+def _basic_assessment(raw_query, candidate, understanding):
+    movie = candidate["movie"]
+    hard_constraints = understanding.get("hard_constraints", [])
+    satisfied = []
+    unsatisfied = []
+    unverifiable = []
+    filters = understanding.get("filters", {})
+    year_range = filters.get("year_range", {})
+    lower_year = year_range.get("from")
+    upper_year = year_range.get("to")
+    if lower_year is not None or upper_year is not None:
+        year = movie.get("release_year")
+        if year is not None and (lower_year is None or year >= lower_year) and (upper_year is None or year <= upper_year):
+            satisfied.append(f"release year {year}")
+        else:
+            unsatisfied.append("requested release year")
+
+    genres = {normalize_text(genre) for genre in movie.get("genres", [])}
+    for genre in filters.get("genres", []):
+        if normalize_text(genre) in genres:
+            satisfied.append(f"{genre} genre")
+        else:
+            unsatisfied.append(f"{genre} genre")
+
+    descriptors = {normalize_text(value) for value in movie.get("content_descriptors", [])}
+    for constraint in hard_constraints:
+        normalized = normalize_text(constraint)
+        if normalized == "release year" or normalized.endswith(" genre"):
+            continue
+        if normalized.startswith("exclude "):
+            excluded = normalized.removeprefix("exclude ")
+            if excluded in genres or excluded in descriptors:
+                unsatisfied.append(f"absence of {excluded}")
+            else:
+                unverifiable.append(f"absence of {excluded}")
+        elif "cast constraint" in normalized:
+            from .cast_verification import classify_cast_gender
+            cast_status = classify_cast_gender(movie)
+            if cast_status["status"] == "contradicted":
+                unsatisfied.append("cast constraint")
+            else:
+                unverifiable.append("absence of female characters from the full film")
+        else:
+            unverifiable.append(constraint)
+
+    movie_terms = set(simple_word_tokens(_movie_text(movie)))
+    query_terms = _query_terms(raw_query, understanding)
+    matched = [term for term in query_terms if term in movie_terms and term not in STOP_WORDS]
+    reason_parts = []
+    if satisfied:
+        reason_parts.append("It meets " + ", ".join(satisfied[:2]))
+    if matched:
+        reason_parts.append("the available metadata mentions " + ", ".join(dict.fromkeys(matched[:3])))
+    missing = list(dict.fromkeys(unverifiable + unsatisfied))
+    if missing:
+        reason_parts.append("but does not verify " + ", ".join(missing[:3]))
+    reason = "; ".join(reason_parts) + "." if reason_parts else _fallback_reason(movie, query_terms, understanding)
+    if not reason.endswith("."):
+        reason += "."
+    return {
+        "match_level": "partial",
+        "satisfied": list(dict.fromkeys(satisfied + ([f"metadata overlap: {term}" for term in matched[:3]]))),
+        "unsatisfied": list(dict.fromkeys(unsatisfied)),
+        "unverifiable": list(dict.fromkeys(unverifiable)),
+        "confidence": min(70, 35 + 8 * len(matched) + 5 * len(satisfied)),
+        "match_reason": reason,
+        "verification_fallback": True,
+    }
+
+
+def rerank_candidates(raw_query, candidates, understanding=None):
+    """Verify a bounded candidate batch against supplied metadata; fail closed to partial."""
     if not candidates:
         return candidates
-    cache_key = ("rerank", raw_query.casefold(), tuple(str(item["movie"]["id"]) for item in candidates))
+    understanding = understanding or local_understanding(raw_query)
+    cache_key = ("verify", raw_query.casefold(), tuple(str(item["movie"]["id"]) for item in candidates))
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
     payload = {
         "original_query": raw_query[:MAX_QUERY_LENGTH],
+        "parsed_requirements": {
+            key: understanding.get(key)
+            for key in ("positive_requirements", "negative_requirements", "hard_constraints", "soft_preferences", "verifiability", "verification_notes")
+        },
         "candidates": [
             {
                 "id": item["movie"]["id"],
                 "title": item["movie"].get("title", ""),
                 "year": item["movie"].get("release_year"),
+                "runtime": item["movie"].get("runtime"),
                 "genres": item["movie"].get("genres", []),
                 "overview": item["movie"].get("overview") or item["movie"].get("synopsis", ""),
+                "tagline": item["movie"].get("tagline", ""),
                 "keywords": item["movie"].get("keywords", []),
                 "cast": item["movie"].get("cast", item["movie"].get("actors", [])),
+                "content_descriptors": item["movie"].get("content_descriptors", []),
+                "top_cast_size": item["movie"].get("top_cast_size"),
+                "gender_coverage": item["movie"].get("gender_coverage"),
+                "certification": item["movie"].get("certification"),
             }
             for item in candidates[:MAX_CANDIDATES]
         ],
     }
-    response = _chat_json(RERANK_PROMPT, payload, max_tokens=1500)
-    if not isinstance(response, dict) or not isinstance(response.get("results"), list):
-        return candidates
+    response = _chat_json(RERANK_PROMPT, payload, max_tokens=1800)
     by_id = {str(item["movie"]["id"]): item for item in candidates}
-    reranked = []
-    for row in response["results"][:MAX_CANDIDATES]:
-        if not isinstance(row, dict) or str(row.get("id")) not in by_id:
+    response_rows = response.get("results") if isinstance(response, dict) else None
+    rows_by_id = {
+        str(row.get("id")): row for row in response_rows or []
+        if isinstance(row, dict) and str(row.get("id")) in by_id
+    }
+    valid_response = (
+        isinstance(response_rows, list)
+        and len(rows_by_id) == len(by_id)
+        and all(
+            row.get("match_level") in {"full", "partial", "none"}
+            and isinstance(row.get("confidence"), int)
+            and not isinstance(row.get("confidence"), bool)
+            and 0 <= row["confidence"] <= 100
+            and isinstance(row.get("satisfied"), list)
+            and isinstance(row.get("unsatisfied"), list)
+            and isinstance(row.get("unverifiable"), list)
+            and isinstance(row.get("reason"), str)
+            for row in rows_by_id.values()
+        )
+    )
+    if not valid_response:
+        rows_by_id = {}
+    verified = []
+    for identifier, original in by_id.items():
+        row = rows_by_id.get(identifier)
+        if not row:
+            if valid_response:
+                continue
+            item = copy.deepcopy(original)
+            item.update(_basic_assessment(raw_query, item, understanding))
+            verified.append(item)
             continue
-        score = row.get("relevance_score")
-        if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 100:
+        match_level = row.get("match_level")
+        confidence = row.get("confidence")
+        if match_level not in {"full", "partial", "none"}:
             continue
-        if score < RERANK_MINIMUM_SCORE:
+        if isinstance(confidence, bool) or not isinstance(confidence, int) or not 0 <= confidence <= 100:
             continue
-        item = copy.deepcopy(by_id[str(row["id"])])
-        item["relevance_score"] = round(score)
+        satisfied = _string_list(row.get("satisfied"), limit=10)
+        unsatisfied = _string_list(row.get("unsatisfied"), limit=10)
+        unverifiable = _string_list(row.get("unverifiable"), limit=10)
+        hard_constraints = understanding.get("hard_constraints", [])
+        if (
+            understanding.get("verifiability") != "verifiable"
+            or unverifiable
+            or unsatisfied
+            or len(satisfied) < len(hard_constraints)
+        ):
+            if match_level == "full":
+                match_level = "partial"
+        unprovable_negative = re.search(
+            r"\b(?:no|not|without|avoid|excluding|except)\b.{0,35}\b(?:women?|female|men?|male|violence|violent|romance|romantic|twist)\b",
+            raw_query,
+            re.IGNORECASE,
+        )
+        if unprovable_negative and match_level == "full":
+            match_level = "partial"
+        if match_level == "none" or confidence < RERANK_MINIMUM_SCORE:
+            continue
         reason = row.get("reason")
-        if isinstance(reason, str) and reason.strip():
-            item["match_reason"] = reason.strip()[:220]
-        item["final_score"] = score * 0.8 + item["search_score"] * 0.2
-        reranked.append(item)
-    if not reranked:
-        return candidates
-    reranked.sort(key=lambda item: item["final_score"], reverse=True)
-    _cache_set(cache_key, reranked)
-    return reranked
+        item = copy.deepcopy(original)
+        item.update({
+            "match_level": match_level,
+            "satisfied": satisfied,
+            "unsatisfied": unsatisfied,
+            "unverifiable": unverifiable,
+            "confidence": confidence,
+            "match_reason": _validated_reason(reason),
+            "verification_fallback": False,
+            "final_score": confidence * 0.8 + item["search_score"] * 0.2,
+        })
+        verified.append(item)
+    if not verified and not valid_response:
+        return []
+    verified.sort(key=lambda item: (
+        item.get("match_level") == "full",
+        len(item.get("satisfied", [])),
+        item.get("confidence", 0),
+        item["movie"].get("average_rating") or 0,
+        item["movie"].get("vote_count", 0),
+    ), reverse=True)
+    _cache_set(cache_key, verified)
+    return verified
 
 
 def build_movie_embeddings(movies, batch_size=64):
