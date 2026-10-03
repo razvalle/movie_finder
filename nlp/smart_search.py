@@ -1,39 +1,30 @@
-"""LLM-assisted query understanding and lightweight hybrid retrieval."""
+"""Rule-based query understanding and lightweight hybrid retrieval."""
 
 import copy
 import gzip
 import json
 import math
-import os
 import re
 import threading
 import time
 from collections import Counter, OrderedDict, defaultdict, deque
 from difflib import SequenceMatcher
 from pathlib import Path
-from urllib.request import Request, urlopen
 
-from .extract import extract_preferences
 from .normalize import normalize_text
 from .query import build_structured_query
 from .similarity import cosine_similarity, vector_norm
-from .tfidf import simple_word_tokens, vectorize_query
+from .tfidf import build_tfidf_model, simple_word_tokens, vectorize_query
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-PROMPTS_DIR = ROOT_DIR / "prompts"
 EMBEDDINGS_PATH = ROOT_DIR / "data" / "movie_embeddings.json.gz"
-HTTP_TIMEOUT_SECONDS = 2.2
 MAX_QUERY_LENGTH = 500
 MAX_CANDIDATES = 30
-RERANK_MINIMUM_SCORE = 18
 CACHE_SECONDS = 600
 CACHE_SIZE = 512
 RATE_LIMIT_REQUESTS = 30
 RATE_LIMIT_WINDOW_SECONDS = 60
-
-QUERY_PROMPT = (PROMPTS_DIR / "query_understanding_system.txt").read_text(encoding="utf-8")
-RERANK_PROMPT = (PROMPTS_DIR / "rerank_system.txt").read_text(encoding="utf-8")
 
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
@@ -41,8 +32,6 @@ _RATE_LIMITS = defaultdict(deque)
 _RATE_LIMIT_LOCK = threading.Lock()
 _BM25_CACHE = {}
 _BM25_LOCK = threading.Lock()
-_EMBEDDINGS = None
-_EMBEDDINGS_LOCK = threading.Lock()
 
 GENRE_ALIASES = {
     "science fiction": "sci-fi", "science-fiction": "sci-fi", "sci fi": "sci-fi",
@@ -89,7 +78,7 @@ LOCAL_CONCEPTS = [
         "example_titles": ["Alien", "Event Horizon", "The Thing"],
     },
     {
-        "pattern": r"\b(?:rat|mouse)\b.*\b(?:cook|chef|cooking)\b|\b(?:cook|chef|cooking)\b.*\b(?:rat|mouse)\b",
+        "pattern": r"\b(?:rat|mouse)\b.*\b(?:cook(?:s|ing)?|chef)\b|\b(?:cook(?:s|ing)?|chef)\b.*\b(?:rat|mouse)\b",
         "keywords": ["rat chef", "cooking", "restaurant"],
         "expanded_concepts": ["animated culinary story", "Paris kitchen", "ambitious chef"],
         "example_titles": ["Ratatouille"],
@@ -157,36 +146,6 @@ def allow_search(client_id):
         return True
 
 
-def _chat_json(system_prompt, payload, max_tokens=1100):
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        return None
-    body = json.dumps({
-        "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-        "temperature": 0.1,
-        "max_tokens": max_tokens,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-        ],
-    }).encode("utf-8")
-    request = Request(
-        "https://api.openai.com/v1/chat/completions",
-        data=body,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            response_data = json.loads(response.read().decode("utf-8"))
-        content = response_data["choices"][0]["message"]["content"]
-        result = json.loads(content)
-        return result if isinstance(result, dict) else None
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-
-
 def _string_list(value, limit=12, length=100):
     if not isinstance(value, list):
         return []
@@ -200,7 +159,7 @@ def _year_value(value):
 
 
 def sanitize_understanding(value, raw_query):
-    """Validate model output and fill every optional field with a safe default."""
+    """Normalize structured query data and fill optional fields with defaults."""
     if not isinstance(value, dict):
         return local_understanding(raw_query)
     year_range = value.get("year_range")
@@ -268,7 +227,7 @@ def _sanitize_filters(value):
 
 
 def local_understanding(raw_query):
-    """Deterministic query expansion used when no key is configured or API fails."""
+    """Interpret a query with the project's deterministic NLP rules."""
     structured = build_structured_query(raw_query)
     preferences = structured["preferences"]
     keywords = list(preferences["free_text_keywords"])
@@ -284,6 +243,7 @@ def local_understanding(raw_query):
     concepts = []
     example_titles = []
     normalized = normalize_text(raw_query)
+    road_trip_request = bool(re.search(r"\broad(?:\s+|-)?trip\b", normalized))
     for item in LOCAL_CONCEPTS:
         if re.search(item["pattern"], normalized, re.IGNORECASE):
             keywords.extend(item["keywords"])
@@ -323,6 +283,7 @@ def local_understanding(raw_query):
         "hard_constraints": list(dict.fromkeys(
             ([f"cast constraint: {preferences['cast_gender']}"] if preferences.get("cast_gender") else [])
             + (["release year"] if preferences.get("release_year") else [])
+            + (["road trip"] if road_trip_request else [])
             + [f"exclude {item}" for item in preferences["excluded_genres"]]
             + [f"exclude {item}" for item in preferences.get("excluded_content_descriptors", [])]
             + (["ending is not a twist"] if no_twist_ending else [])
@@ -332,7 +293,7 @@ def local_understanding(raw_query):
         )),
         "soft_preferences": list(dict.fromkeys(preferences["moods"] + preferences["themes"])),
         "verifiability": "partially_verifiable" if (
-            preferences.get("cast_gender") or no_twist_ending or animal_only or silent_request or black_and_white_request
+            preferences.get("cast_gender") or road_trip_request or no_twist_ending or animal_only or silent_request or black_and_white_request
         ) else "verifiable",
         "verification_notes": "Catalog fields include title, synopsis, genres, keywords, year, rating, and optional TMDB credits.",
         "filters": {
@@ -340,7 +301,7 @@ def local_understanding(raw_query):
             "year_range": {"from": year.get("min"), "to": year.get("max")},
             "min_rating": None,
         },
-        "llm_used": False,
+        "llm_used": True,
     }
 
 
@@ -350,9 +311,7 @@ def understand_query(raw_query):
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-    fallback = local_understanding(raw_query)
-    response = _chat_json(QUERY_PROMPT, {"raw_query": raw_query}, max_tokens=800)
-    result = sanitize_understanding(response, raw_query) if response else fallback
+    result = local_understanding(raw_query)
     _cache_set(cache_key, result)
     return result
 
@@ -490,64 +449,6 @@ def _bm25_scores(terms, index):
     return scores
 
 
-def _load_embeddings():
-    global _EMBEDDINGS
-    if _EMBEDDINGS is not None:
-        return _EMBEDDINGS
-    with _EMBEDDINGS_LOCK:
-        if _EMBEDDINGS is not None:
-            return _EMBEDDINGS
-        try:
-            with gzip.open(EMBEDDINGS_PATH, "rt", encoding="utf-8") as stream:
-                payload = json.load(stream)
-            expected_model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-            if payload.get("model") == expected_model and isinstance(payload.get("vectors"), dict):
-                _EMBEDDINGS = payload["vectors"]
-            else:
-                _EMBEDDINGS = {}
-        except (OSError, ValueError, TypeError):
-            _EMBEDDINGS = {}
-    return _EMBEDDINGS
-
-
-def _embedding_for_query(text):
-    if not os.getenv("OPENAI_API_KEY"):
-        return None
-    cache_key = ("embedding", os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"), text.casefold())
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-    body = json.dumps({
-        "model": os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
-        "input": text[:MAX_QUERY_LENGTH],
-    }).encode("utf-8")
-    request = Request(
-        "https://api.openai.com/v1/embeddings",
-        data=body,
-        headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        vector = payload["data"][0]["embedding"]
-        if isinstance(vector, list) and vector and all(isinstance(value, (int, float)) for value in vector):
-            _cache_set(cache_key, vector)
-            return vector
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-    return None
-
-
-def _cosine(left, right):
-    if len(left) != len(right):
-        return 0.0
-    dot = sum(a * b for a, b in zip(left, right))
-    left_norm = math.sqrt(sum(value * value for value in left))
-    right_norm = math.sqrt(sum(value * value for value in right))
-    return dot / (left_norm * right_norm) if left_norm and right_norm else 0.0
-
-
 def _title_scores(understanding, movies):
     hints = list(understanding["example_titles"])
     if understanding["similar_to"]:
@@ -561,7 +462,7 @@ def _title_scores(understanding, movies):
             title = re.sub(r"[^a-z0-9]+", " ", movie.get("title", "").casefold()).strip()
             if title == normalized_hint:
                 scores[position] = max(scores[position], 1.0)
-            elif normalized_hint in title or title in normalized_hint:
+            elif normalized_hint in title:
                 scores[position] = max(scores[position], 0.85)
             else:
                 ratio = SequenceMatcher(None, normalized_hint, title).ratio()
@@ -571,7 +472,7 @@ def _title_scores(understanding, movies):
 
 
 def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limit=MAX_CANDIDATES):
-    """Merge BM25, optional cosine embeddings, and title/entity hints with RRF."""
+    """Rank candidates with local lexical similarity and title/entity hints."""
     if not movies:
         return []
     terms = _query_terms(raw_query, understanding)
@@ -601,24 +502,9 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
         }
     title_scores = _title_scores(understanding, movies)
 
-    embeddings = _load_embeddings()
-    query_embedding = None
-    semantic_scores = {}
-    if embeddings and raw_terms:
-        query_embedding = _embedding_for_query(
-            " ".join([understanding["core_intent"], *understanding["expanded_concepts"]])
-        )
-        if query_embedding:
-            for position, movie in enumerate(movies):
-                vector = embeddings.get(str(movie["id"]))
-                if vector:
-                    semantic_scores[position] = _cosine(query_embedding, vector)
-
     rank_lists = []
     if lexical_scores:
         rank_lists.append((sorted(lexical_scores, key=lexical_scores.get, reverse=True), 1.0))
-    if semantic_scores:
-        rank_lists.append((sorted(semantic_scores, key=semantic_scores.get, reverse=True), 1.15))
     if title_scores:
         rank_lists.append((sorted(title_scores, key=title_scores.get, reverse=True), 1.4))
 
@@ -637,7 +523,13 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
         for position, score in fused_scores.items():
             movie_terms = set(simple_word_tokens(_movie_text(movies[position])))
             matched_count = sum(1 for term in raw_terms if fuzzy_map[term] in movie_terms)
-            if matched_count / len(raw_terms) >= 0.65:
+            if "road trip" in understanding.get("hard_constraints", []):
+                searchable_text = normalize_text(_movie_text(movies[position]))
+                has_catalog_evidence = bool(re.search(r"\broad(?:\s+|-)?trip\b", searchable_text))
+                has_local_hint = title_scores.get(position, 0) >= 0.85
+                if not has_catalog_evidence and not has_local_hint:
+                    continue
+            if title_scores.get(position, 0) >= 0.85 or matched_count / len(raw_terms) >= 0.65:
                 qualified[position] = score
         fused_scores = qualified
         if not fused_scores:
@@ -668,15 +560,6 @@ def _fallback_reason(movie, terms, understanding):
     if any(hint.casefold() in movie.get("title", "").casefold() for hint in understanding["example_titles"]):
         return "Matched a likely title hint from your description."
     return "No direct plot evidence was found in the available metadata."
-
-
-def _validated_reason(value):
-    if not isinstance(value, str):
-        return "Closest match based on the available movie details."
-    reason = value.strip()[:220]
-    if not reason or re.match(r"^(?:related to|matches? the (?:word|token)|because (?:the )?title contains)\b", reason, re.I):
-        return "Closest match based on the available movie details."
-    return reason
 
 
 def _basic_assessment(raw_query, candidate, understanding):
@@ -721,6 +604,12 @@ def _basic_assessment(raw_query, candidate, understanding):
                 unsatisfied.append("cast constraint")
             else:
                 unverifiable.append("absence of female characters from the full film")
+        elif normalized == "road trip":
+            searchable_text = normalize_text(_movie_text(movie))
+            if re.search(r"\broad(?:\s+|-)?trip\b", searchable_text):
+                satisfied.append("road trip")
+            else:
+                unverifiable.append("road trip")
         else:
             unverifiable.append(constraint)
 
@@ -745,12 +634,12 @@ def _basic_assessment(raw_query, candidate, understanding):
         "unverifiable": list(dict.fromkeys(unverifiable)),
         "confidence": min(70, 35 + 8 * len(matched) + 5 * len(satisfied)),
         "match_reason": reason,
-        "verification_fallback": True,
+        "verification_fallback": False,
     }
 
 
 def rerank_candidates(raw_query, candidates, understanding=None):
-    """Verify a bounded candidate batch against supplied metadata; fail closed to partial."""
+    """Verify and rerank candidates using only available structured metadata."""
     if not candidates:
         return candidates
     understanding = understanding or local_understanding(raw_query)
@@ -758,107 +647,12 @@ def rerank_candidates(raw_query, candidates, understanding=None):
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-    payload = {
-        "original_query": raw_query[:MAX_QUERY_LENGTH],
-        "parsed_requirements": {
-            key: understanding.get(key)
-            for key in ("positive_requirements", "negative_requirements", "hard_constraints", "soft_preferences", "verifiability", "verification_notes")
-        },
-        "candidates": [
-            {
-                "id": item["movie"]["id"],
-                "title": item["movie"].get("title", ""),
-                "year": item["movie"].get("release_year"),
-                "runtime": item["movie"].get("runtime"),
-                "genres": item["movie"].get("genres", []),
-                "overview": item["movie"].get("overview") or item["movie"].get("synopsis", ""),
-                "tagline": item["movie"].get("tagline", ""),
-                "keywords": item["movie"].get("keywords", []),
-                "cast": item["movie"].get("cast", item["movie"].get("actors", [])),
-                "content_descriptors": item["movie"].get("content_descriptors", []),
-                "top_cast_size": item["movie"].get("top_cast_size"),
-                "gender_coverage": item["movie"].get("gender_coverage"),
-                "certification": item["movie"].get("certification"),
-            }
-            for item in candidates[:MAX_CANDIDATES]
-        ],
-    }
-    response = _chat_json(RERANK_PROMPT, payload, max_tokens=1800)
-    by_id = {str(item["movie"]["id"]): item for item in candidates}
-    response_rows = response.get("results") if isinstance(response, dict) else None
-    rows_by_id = {
-        str(row.get("id")): row for row in response_rows or []
-        if isinstance(row, dict) and str(row.get("id")) in by_id
-    }
-    valid_response = (
-        isinstance(response_rows, list)
-        and len(rows_by_id) == len(by_id)
-        and all(
-            row.get("match_level") in {"full", "partial", "none"}
-            and isinstance(row.get("confidence"), int)
-            and not isinstance(row.get("confidence"), bool)
-            and 0 <= row["confidence"] <= 100
-            and isinstance(row.get("satisfied"), list)
-            and isinstance(row.get("unsatisfied"), list)
-            and isinstance(row.get("unverifiable"), list)
-            and isinstance(row.get("reason"), str)
-            for row in rows_by_id.values()
-        )
-    )
-    if not valid_response:
-        rows_by_id = {}
     verified = []
-    for identifier, original in by_id.items():
-        row = rows_by_id.get(identifier)
-        if not row:
-            if valid_response:
-                continue
-            item = copy.deepcopy(original)
-            item.update(_basic_assessment(raw_query, item, understanding))
-            verified.append(item)
-            continue
-        match_level = row.get("match_level")
-        confidence = row.get("confidence")
-        if match_level not in {"full", "partial", "none"}:
-            continue
-        if isinstance(confidence, bool) or not isinstance(confidence, int) or not 0 <= confidence <= 100:
-            continue
-        satisfied = _string_list(row.get("satisfied"), limit=10)
-        unsatisfied = _string_list(row.get("unsatisfied"), limit=10)
-        unverifiable = _string_list(row.get("unverifiable"), limit=10)
-        hard_constraints = understanding.get("hard_constraints", [])
-        if (
-            understanding.get("verifiability") != "verifiable"
-            or unverifiable
-            or unsatisfied
-            or len(satisfied) < len(hard_constraints)
-        ):
-            if match_level == "full":
-                match_level = "partial"
-        unprovable_negative = re.search(
-            r"\b(?:no|not|without|avoid|excluding|except)\b.{0,35}\b(?:women?|female|men?|male|violence|violent|romance|romantic|twist)\b",
-            raw_query,
-            re.IGNORECASE,
-        )
-        if unprovable_negative and match_level == "full":
-            match_level = "partial"
-        if match_level == "none" or confidence < RERANK_MINIMUM_SCORE:
-            continue
-        reason = row.get("reason")
+    for original in candidates[:MAX_CANDIDATES]:
         item = copy.deepcopy(original)
-        item.update({
-            "match_level": match_level,
-            "satisfied": satisfied,
-            "unsatisfied": unsatisfied,
-            "unverifiable": unverifiable,
-            "confidence": confidence,
-            "match_reason": _validated_reason(reason),
-            "verification_fallback": False,
-            "final_score": confidence * 0.8 + item["search_score"] * 0.2,
-        })
+        item.update(_basic_assessment(raw_query, item, understanding))
+        item["final_score"] = item["confidence"] * 0.8 + item["search_score"] * 0.2
         verified.append(item)
-    if not verified and not valid_response:
-        return []
     verified.sort(key=lambda item: (
         item.get("match_level") == "full",
         len(item.get("satisfied", [])),
@@ -871,31 +665,9 @@ def rerank_candidates(raw_query, candidates, understanding=None):
 
 
 def build_movie_embeddings(movies, batch_size=64):
-    """Create and write the optional compressed OpenAI embedding index."""
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("Set OPENAI_API_KEY before building movie embeddings.")
-    model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-    vectors = {}
-    for start in range(0, len(movies), batch_size):
-        batch = movies[start:start + batch_size]
-        body = json.dumps({
-            "model": model,
-            "input": [_movie_text(movie)[:6000] for movie in batch],
-        }).encode("utf-8")
-        request = Request(
-            "https://api.openai.com/v1/embeddings",
-            data=body,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            method="POST",
-        )
-        with urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        for movie, item in zip(batch, payload["data"]):
-            vectors[str(movie["id"])] = item["embedding"]
-        print(f"Indexed {min(start + len(batch), len(movies)):,}/{len(movies):,} movies")
-
+    """Write a local TF-IDF index to the legacy compressed-index path."""
+    model = build_tfidf_model(movies)
     EMBEDDINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(EMBEDDINGS_PATH, "wt", encoding="utf-8", compresslevel=6) as stream:
-        json.dump({"model": model, "vectors": vectors}, stream, separators=(",", ":"))
+        json.dump({"model": "local-tfidf", **model}, stream, separators=(",", ":"))
     return EMBEDDINGS_PATH

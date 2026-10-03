@@ -1,4 +1,4 @@
-"""Build optional OpenAI embeddings for the compact deployable catalog."""
+"""Build a local TF-IDF index for the compact deployable catalog."""
 
 import ast
 import json
@@ -41,4 +41,4 @@ def deployment_movies():
 if __name__ == "__main__":
     movies = deployment_movies()
     output = build_movie_embeddings(movies)
-    print(f"Wrote embeddings for {len(movies):,} movies to {output}")
+    print(f"Wrote local TF-IDF index for {len(movies):,} movies to {output}")

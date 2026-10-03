@@ -1,4 +1,7 @@
-"""Compare the old Render fallback baseline with current hybrid retrieval.
+"""Diagnostic comparison against an old Render fallback snapshot only.
+
+This output is not a correctness oracle and is not GPT-era ground truth.
+Do not tune the rule-based search to reproduce its counts or result order.
 
 Run from the repository root:
     python tests/smart_search_report.py

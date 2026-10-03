@@ -1,5 +1,7 @@
 """Unit tests for query expansion, schema validation, and hybrid retrieval."""
 
+import os
+import socket
 import sys
 import unittest
 from pathlib import Path
@@ -8,7 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from data.generated_movies import GENERATED_MOVIES
-from nlp.smart_search import _query_terms, local_understanding, rerank_candidates, retrieve_candidates, sanitize_understanding
+from nlp.smart_search import _query_terms, local_understanding, rerank_candidates, retrieve_candidates, sanitize_understanding, understand_query
 
 
 class SmartSearchTests(unittest.TestCase):
@@ -61,38 +63,22 @@ class SmartSearchTests(unittest.TestCase):
         ))
         self.assertEqual(understanding["filters"]["year_range"], {"from": 2023, "to": 2023})
 
-    def test_verification_failure_marks_results_partial(self):
-        movie = GENERATED_MOVIES[0]
-        candidate = {"movie": movie, "search_score": 90, "match_reason": "old"}
-        query = "movie with dwarfs"
-        with patch("nlp.smart_search._chat_json", return_value=None):
-            results = rerank_candidates(query, [candidate], local_understanding(query))
-        self.assertEqual(results[0]["match_level"], "partial")
-        self.assertTrue(results[0]["verification_fallback"])
-        self.assertNotIn("Related to", results[0]["match_reason"])
+    def test_core_search_is_rule_based_and_explainable_without_network(self):
+        query = "moive with drgons"
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "socket.create_connection",
+            side_effect=AssertionError("core search must not make network requests"),
+        ):
+            understanding = understand_query(query)
+            candidates = retrieve_candidates(query, understanding, GENERATED_MOVIES, limit=5)
+            results = rerank_candidates(query, candidates, understanding)
 
-    def test_incomplete_verifier_response_fails_back_to_partial(self):
-        movie = GENERATED_MOVIES[0]
-        candidate = {"movie": movie, "search_score": 90, "match_reason": "old"}
-        query = "query with one returned candidate"
-        invalid = {"results": [{"id": "not-this-movie", "match_level": "full"}]}
-        with patch("nlp.smart_search._chat_json", return_value=invalid):
-            results = rerank_candidates(query, [candidate], local_understanding(query))
-        self.assertEqual(results[0]["match_level"], "partial")
-        self.assertTrue(results[0]["verification_fallback"])
-
-    def test_valid_verifier_response_can_confirm_exact_match(self):
-        movie = GENERATED_MOVIES[0]
-        candidate = {"movie": movie, "search_score": 90, "match_reason": "old"}
-        query = movie["title"]
-        response = {"results": [{
-            "id": movie["id"], "match_level": "full", "satisfied": [], "unsatisfied": [],
-            "unverifiable": [], "confidence": 95, "reason": "The title exactly matches the requested movie.",
-        }]}
-        with patch("nlp.smart_search._chat_json", return_value=response):
-            results = rerank_candidates(query, [candidate], local_understanding(query))
-        self.assertEqual(results[0]["match_level"], "full")
-        self.assertFalse(results[0]["verification_fallback"])
+        self.assertIn("dragon", understanding["keywords"])
+        self.assertTrue(candidates)
+        self.assertTrue(any("Dragon" in item["movie"]["title"] for item in candidates))
+        self.assertTrue(results)
+        self.assertTrue(all(item["match_reason"] for item in results))
+        self.assertTrue(all(not item["verification_fallback"] for item in results))
 
 
 if __name__ == "__main__":

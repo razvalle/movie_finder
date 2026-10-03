@@ -3,8 +3,8 @@
 Movie Finder is a Python 3 / Flask application using Jinja templates,
 plain HTML forms, and a small browser-side JavaScript enhancement. Search
 and ranking run on the server. The NLP stack combines local structured
-parsing, TF-IDF/BM25-style lexical retrieval, optional OpenAI embeddings,
-and optional JSON-only OpenAI query parsing and candidate verification.
+parsing, BM25/TF-IDF lexical retrieval, fuzzy and title matching, weighted
+scoring, and rule-based candidate assessment. Search requires no AI model or API key.
 
 ```
 "I want something suspenseful but not horror, preferably a mystery under two hours."
@@ -134,24 +134,17 @@ unknown results remain explicitly unverified.
 
 ### Smart search outcomes
 
-`prompts/query_understanding_system.txt` parses positive and negative
-requirements, hard constraints, soft preferences, filters, verifiability, and
-language. `prompts/rerank_system.txt` verifies up to 30 retrieved candidates in
-one batched JSON response against the original query and only the fields supplied
-from the local catalog. Both calls are schema-sanitized, cached in process for
-10 minutes, and rate-limited to 30 searches per client per minute. User queries
-are JSON data, not instructions. The API key is read server-side only.
-
-Retrieval merges lexical BM25/TF-IDF, optional precomputed movie embeddings, and
-title hints using Reciprocal Rank Fusion. Stopwords and negated concepts are
-removed from lexical terms; if retrieval has no useful signal, the app returns
-no close matches instead of substituting popular titles. A result is labeled
-`Exact match` only when the verifier reports all hard requirements as verified.
-Otherwise it is shown as a `Closest match`, with unverified data called out.
-When the LLM is unavailable, the UI says so and uses basic retrieval; it does not
-silently present basic results as verified. When no candidates are available,
-the UI offers three parser-generated alternatives, or deterministic general
-alternatives if the parser is unavailable.
+The rule-based parser extracts structured requirements, exclusions, filters,
+and semantic terms. Retrieval uses local BM25/TF-IDF cosine similarity, fuzzy
+term matching, and title hints; candidate assessment checks the retrieved movies
+against available catalog metadata and explains satisfied, contradicted, and
+unverifiable requirements. Weighted scoring ranks the candidates. Stopwords and
+negated concepts are removed from retrieval terms. Search is deterministic and
+does not make external AI or embedding calls. If no useful retrieval signal is
+available, the app returns no close matches instead of substituting popular
+titles. Results remain labeled as closest matches when the catalog cannot verify
+all requirements. The query cache and per-client search rate limit are local to
+each app worker.
 
 The local catalog in this workspace currently loads 404,553 IMDb records from a
 gitignored `data/imdb_movies.json`: all have a `synopsis` and `keywords`, 326,138
@@ -170,9 +163,6 @@ template, browser JavaScript, or committed source:
 
 | Variable | Required for | Default |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | Query parsing, batched verification, and query embeddings | unset; basic-search fallback |
-| `OPENAI_MODEL` | Search LLM | `gpt-4o-mini` |
-| `OPENAI_EMBEDDING_MODEL` | Building/reading the optional embedding index | `text-embedding-3-small` |
 | `TMDB_API_KEY` | One-time catalog enrichment only | unset |
 | `TMDB_CATALOG_PATH` | Choosing input for `data/enrich_cast.py`; `deployment` selects the Render catalog | first available local catalog |
 
@@ -182,28 +172,18 @@ For a compact Render data build, run from the project root before deploying:
 $env:TMDB_API_KEY = "your_tmdb_key"
 $env:TMDB_CATALOG_PATH = "deployment"
 python data/enrich_cast.py
-$env:OPENAI_API_KEY = "your_openai_key"
 python data/build_embeddings.py
 ```
 
-Bundle `data/movie_cast_enrichment.json` and `data/movie_embeddings.json.gz`
-with the deployment when you want those offline indexes available at runtime.
-Re-run enrichment when the catalog changes; rerun `data/build_embeddings.py`
-after changing searchable fields or the embedding model. The Render service
-continues to use the existing `render.yaml` build/start commands. Add the OpenAI
-key in Render only if live query parsing/verification is desired; TMDB is not
-called by the deployed request path.
+`data/build_embeddings.py` writes a compressed local TF-IDF index; it does not
+require an AI key, and that optional artifact is not required by the app at
+runtime. Re-run enrichment and the index builder when their source catalog data
+changes. The Render service continues to use the existing `render.yaml`
+build/start commands; TMDB is not called by the deployed request path.
 
-**Latency and cost:** the app makes at most one short parse call and one batched
-verification call per uncached query; each request currently times out after
-2.2 seconds. Optional query embedding is another request. In-memory caching is
-per worker, so repeated queries in one worker are much cheaper than cold queries.
-Per-search cost varies with the model and candidate metadata; estimate it as
-`(input_tokens * input_price + output_tokens * output_price) / 1,000,000` using
-the provider's current prices. A small model and a 30-record batch keep the
-typical request inexpensive, while long overviews increase both tokens and
-latency. Embeddings cost money once during indexing and consume deployment disk
-and memory; the tracked compact catalog keeps that bounded.
+Search performs query parsing, retrieval, assessment, and scoring locally. Its
+response time depends on catalog size; query caching and rate limits are local
+to each app worker.
 
 **Next improvements:**
 - Add curated violence/romance and character-presence annotations with provenance.

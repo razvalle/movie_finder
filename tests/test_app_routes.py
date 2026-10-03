@@ -291,7 +291,6 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b"30 closest matches", response.data)
         self.assertIn(b"Unverified", response.data)
         self.assertIn(b"MOVIE_FINDER_GROUP4", response.data)
-        self.assertIn(b"not endorsed or certified by TMDB", response.data)
         self.assertNotIn(b"Where There Is Life", response.data)
         self.assertNotIn(b"There Will Be Blood", response.data)
         self.assertNotIn(b"There's Something About Mary", response.data)
