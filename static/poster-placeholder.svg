@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 3" role="img" aria-label="Poster unavailable">
+  <rect width="2" height="3" fill="#202326"/>
+  <path d="M.48 1.24h1.04v.76H.48zM.62 1.05h.76v.14H.62zM.62 2.12h.76" fill="none" stroke="#d3b879" stroke-linecap="round" stroke-linejoin="round" stroke-width=".055"/>
+  <circle cx="1" cy="1.62" r=".12" fill="#d3b879"/>
+  <text x="1" y="2.45" fill="#d8d5cb" font-family="sans-serif" font-size=".12" text-anchor="middle">NO POSTER</text>
+</svg>

@@ -308,6 +308,28 @@ body {
   object-fit: cover;
 }
 
+.movie-card__feedback {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+
+.movie-card__feedback button {
+  border: 1px solid var(--ink-600);
+  border-radius: 4px;
+  padding: 0.35rem 0.6rem;
+  background: var(--ink-800);
+  color: var(--paper-100);
+  font: inherit;
+  cursor: pointer;
+}
+
+.movie-card__feedback button:hover,
+.movie-card__feedback button:focus-visible {
+  border-color: var(--gold-500);
+}
+
 .movie-card__poster small {
   font-size: 0.68rem;
 }

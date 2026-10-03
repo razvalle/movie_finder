@@ -2,19 +2,24 @@
 
 Run from the project root:
     python tests/test_app_routes.py
+    python -m unittest tests.test_app_routes.SearchRouteTests.test_search_benchmark_expected_top_results
 """
 
 import sys
 import unittest
 import re
+import sqlite3
+import tempfile
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import COUNTRY_LABELS, app, detect_nationality, movie_poster_url
+from app import COUNTRY_LABELS, app, build_match_reasons, detect_nationality, movie_poster_url
 from data.generated_movies import GENERATED_MOVIES
 from data.movies import MOVIES
+from nlp.explain import explain_match
 
 
 class SearchRouteTests(unittest.TestCase):
@@ -190,6 +195,87 @@ class SearchRouteTests(unittest.TestCase):
         commons_url = "https://commons.wikimedia.org/wiki/Special:FilePath/Film_Poster.jpg"
         self.assertEqual(movie_poster_url({"poster_url": commons_url}), commons_url)
         self.assertEqual(movie_poster_url({"poster_url": "https://example.invalid/poster.jpg"}), "")
+
+    def test_search_explanations_use_existing_scoring_breakdown(self):
+        movie = {"runtime": 110, "release_year": 2020}
+        preferences = {
+            "runtime": {"min": None, "max": None, "target": None},
+            "release_year": {"min": 2020, "max": 2020},
+            "excluded_genres": ["horror"],
+            "excluded_moods": [],
+            "excluded_themes": [],
+        }
+        breakdown = {
+            "genre": {"matched": ["mystery"], "missing": []},
+            "mood": {"matched": ["suspenseful"], "missing": []},
+            "theme": None,
+            "keyword": None,
+            "runtime": None,
+            "release_year": 1.0,
+        }
+        reasons = build_match_reasons(
+            movie,
+            preferences,
+            breakdown,
+            ["mood suspenseful", "theme mystery", "keyword detective"],
+            cast_supported=True,
+        )
+        reason_text = [reason["text"] for reason in reasons]
+        self.assertIn("Mystery genre matched", reason_text)
+        self.assertIn("Suspenseful mood matched", reason_text)
+        self.assertIn("Released in 2020", reason_text)
+        self.assertIn("No horror tag detected", reason_text)
+        self.assertIn("Matched: mood suspenseful", reason_text)
+        self.assertIn("Matched: theme mystery", reason_text)
+        self.assertIn("Matched: keyword detective", reason_text)
+        self.assertIn("Cast evidence supports your request", reason_text)
+
+    def test_search_benchmark_expected_top_results(self):
+        cases = [
+            ("The Ring", "The Ring"),
+            ("Dunkirk", "Dunkirk"),
+            ("recommend a canadian movie called Incendies", "Incendies"),
+        ]
+        for query, expected_title in cases:
+            with self.subTest(query=query):
+                response = self.client.get("/", query_string={"q": query, "per_page": 12})
+                self.assertEqual(response.status_code, 200)
+                titles = re.findall(rb'<h3 class="movie-card__title">(.*?)</h3>', response.data)
+                self.assertTrue(titles)
+                self.assertEqual(titles[0].decode("utf-8"), expected_title)
+
+    def test_missing_posters_render_fixed_fallback_asset(self):
+        movie = deepcopy(MOVIES[0])
+        movie["id"] = 99999991
+        movie.pop("poster_url", None)
+        movie.pop("poster_path", None)
+        with patch("app.MOVIES", [movie]):
+            response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'src="/static/poster-placeholder.svg"', response.data)
+        self.assertIn(b'data-poster-fallback="/static/poster-placeholder.svg"', response.data)
+
+    def test_feedback_submission_is_persisted_without_changing_search(self):
+        movie = MOVIES[0]
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "feedback.sqlite3"
+            with patch("app.FEEDBACK_DB_PATH", database):
+                response = self.client.post("/feedback", data={
+                    "query": "mystery without horror",
+                    "movie_id": str(movie["id"]),
+                    "relevant": "0",
+                })
+            self.assertEqual(response.status_code, 302)
+            self.assertIn("feedback=saved", response.headers["Location"])
+            connection = sqlite3.connect(database)
+            try:
+                row = connection.execute(
+                    "SELECT query, movie_id, movie_title, relevant, created_at FROM result_feedback"
+                ).fetchone()
+            finally:
+                connection.close()
+        self.assertEqual(row[:4], ("mystery without horror", movie["id"], movie["title"], 0))
+        self.assertTrue(row[4].endswith("+00:00"))
 
     def test_unavailable_filter_offers_alternative_searches(self):
         response = self.client.get("/?language=es")

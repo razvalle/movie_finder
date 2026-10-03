@@ -25,9 +25,11 @@ import json
 from pathlib import Path
 import pycountry
 
-from flask import Flask, render_template, request
+from flask import Flask, redirect, render_template, request, url_for
 
 from data.movies import MOVIES
+from feedback_store import FEEDBACK_DB_PATH, record_feedback
+from poster_storage import poster_public_base_url, poster_public_url
 from nlp.extract import extract_preferences
 from nlp.normalize import normalize_text
 from nlp.query import build_structured_query, detect_country
@@ -42,6 +44,10 @@ app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
 QUERY_LOGGER = logging.getLogger("movie_finder.query")
 QUERY_LOGGER.setLevel(logging.INFO)
+POSTER_PUBLIC_BASE_URL = poster_public_base_url()
+if POSTER_PUBLIC_BASE_URL:
+    for movie in MOVIES:
+        movie["poster_url"] = poster_public_url(movie["id"])
 
 # Built once at startup -- rebuilding per-request would be wasteful
 # since the movie corpus doesn't change while the server is running.
@@ -147,16 +153,31 @@ def poster_exists(movie):
 
 
 def movie_poster_url(movie):
+    poster_url = movie.get("poster_url")
+    if POSTER_PUBLIC_BASE_URL and isinstance(poster_url, str) and poster_url.startswith(POSTER_PUBLIC_BASE_URL + "/"):
+        return poster_url
     poster_path = movie.get("poster_path")
     if isinstance(poster_path, str) and poster_path.startswith("/"):
         return f"https://image.tmdb.org/t/p/w342{poster_path}"
-    poster_url = movie.get("poster_url")
     if isinstance(poster_url, str) and poster_url.startswith((
         "https://commons.wikimedia.org/wiki/Special:FilePath/",
         "https://upload.wikimedia.org/wikipedia/commons/",
     )):
         return poster_url
     return ""
+
+
+def build_match_reasons(movie, preferences, breakdown, satisfied=(), cast_supported=False):
+    reasons = explain_match(movie, preferences, breakdown)
+    existing = {reason["text"].casefold() for reason in reasons}
+    for detail in satisfied:
+        text = f"Matched: {detail}"
+        if text.casefold() not in existing:
+            reasons.append({"ok": True, "text": text})
+            existing.add(text.casefold())
+    if cast_supported:
+        reasons.append({"ok": True, "text": "Cast evidence supports your request"})
+    return reasons
 
 
 def movie_origin_label(movie):
@@ -537,6 +558,7 @@ def index():
 
     context = {
         "query": query,
+        "feedback_saved": request.args.get("feedback") == "saved",
         "selected_genre": selected_genre,
         "selected_language": selected_language,
         "language_options": movie_languages,
@@ -713,13 +735,20 @@ def index():
                     ),
                     "contradicted": False,
                 }
+            reasons = build_match_reasons(
+                movie,
+                ranking_preferences,
+                entry["breakdown"],
+                entry.get("satisfied", []),
+                cast_supported=bool(cast_constraint and not negative_cast_constraint and evaluate_cast_constraint(movie, cast_constraint)),
+            )
             display_results.append({
                 "rank": rank,
                 "movie": movie,
                 "percent": entry["percent"],
                 "poster_exists": poster_exists(movie),
                 "genres_display": ", ".join(title_case(g) for g in movie["genres"]),
-                "reasons": explain_match(movie, ranking_preferences, entry["breakdown"]),
+                "reasons": reasons,
                 "match_reason": entry["match_reason"],
                 "match_level": entry["match_level"],
                 "match_badge": "Exact match" if entry["match_level"] == "full" else "Closest match",
@@ -794,6 +823,22 @@ def index():
         })
 
     return render_template("index.html", **context)
+
+
+@app.route("/feedback", methods=["POST"])
+def submit_feedback():
+    query = request.form.get("query", "").strip()
+    movie_id = request.form.get("movie_id", "").strip()
+    relevant_value = request.form.get("relevant", "")
+    if not query or len(query) > 500 or not movie_id.isdigit() or relevant_value not in {"0", "1"}:
+        return "Invalid feedback.", 400
+
+    movie = next((item for item in MOVIES if str(item.get("id")) == movie_id), None)
+    if movie is None:
+        return "Unknown movie.", 404
+
+    record_feedback(query, movie["id"], movie["title"], relevant_value == "1", FEEDBACK_DB_PATH)
+    return redirect(url_for("index", q=query, feedback="saved"))
 
 
 if __name__ == "__main__":

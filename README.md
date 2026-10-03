@@ -246,6 +246,40 @@ production-country records and 4 explicitly identified Commons poster images.
 It is bundled with the Render deployment. TMDB remains preferred when available
 and takes precedence over these fallback fields.
 
+### Supabase poster storage and feedback
+
+The Render catalog posters can be uploaded to a public Supabase Storage bucket.
+When `SUPABASE_URL` is configured, the app builds each movie record's public
+`poster_url` from its ID and the default `movie-posters` bucket. Feedback uses
+the same project's Postgres REST API when `SUPABASE_URL` and
+`SUPABASE_SERVICE_ROLE_KEY` are configured. Without these variables, local
+development stores feedback in `instance/feedback.sqlite3`.
+
+1. Apply `supabase/migrations/001_storage.sql` in the Supabase SQL Editor.
+2. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in your local environment.
+   Never commit the service key. Optionally set `SUPABASE_POSTER_BUCKET` to use
+   a different bucket name.
+3. Upload and publicly verify the bundled Render catalog posters locally:
+
+   ```powershell
+   python -m data.upload_posters_supabase
+   ```
+
+   Recheck public availability later without uploading again:
+
+   ```powershell
+   python -m data.upload_posters_supabase --verify-only
+   ```
+
+4. After verification passes for every poster, add `SUPABASE_URL` and
+   `SUPABASE_SERVICE_ROLE_KEY` to Render's environment settings and deploy. Never
+   expose the service key in client-side code or commit it to Git.
+5. Remove `static/images/` from the repository only after the deployed poster
+   URLs have been confirmed working. The existing ignore rule already prevents
+   new untracked poster files from being added. A normal deletion commit leaves
+   the old blobs in Git history; purging those blobs requires a coordinated
+   history rewrite and force-push.
+
 ### TMDB attribution and deployment notes
 
 The project uses TMDB as a metadata source for enrichment, not as a substitute

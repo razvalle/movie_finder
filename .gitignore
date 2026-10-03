@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .venv-1/
+instance/
 
 # Local generated indexes and catalogs
 data/imdb/
