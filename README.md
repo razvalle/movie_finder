@@ -69,6 +69,67 @@ python data/build_popular_movies.py
 The Recognition filter selects movies with a curated major-award win label.
 Popularity in the fallback catalog is based on IMDb vote counts.
 
+### Dataset provenance and cleaning rules
+
+Sources: IMDb public datasets (`title.basics`, `title.ratings`, optional
+`title.akas`) for the 1,000 popular titles, 65 hand-written curated records, and
+optional Wikidata/Wikimedia and TMDB enrichment. IMDb data is used under IMDb's
+non-commercial dataset terms.
+
+`data/import_imdb.py` applies these rules, in order:
+1. Keep only rows with `titleType == "movie"`.
+2. Drop rows with no `startYear`, or a year outside 1990-2026.
+3. Drop rows with no genres; genres are lower-cased.
+4. Missing runtime (`\N`) is stored as `0`, meaning "unknown", not a real length.
+5. Ratings and vote counts are joined by `tconst`; unrated titles keep a null rating and 0 votes.
+6. Release regions come from `title.akas` and are release markets, not production origin.
+7. The `synopsis` is a generated metadata sentence, because IMDb supplies no plots.
+   `themes`, `mood_tags` and `content_descriptors` are empty (except `adult`).
+8. Records are sorted by year, title, then IMDb id, and ids are reassigned sequentially.
+
+`data/build_popular_movies.py` then keeps non-adult titles with at least 10,000
+votes that have a title, year and genres, drops titles that duplicate a curated
+record (normalized title plus year), ranks by votes then rating, removes
+duplicate title-plus-year pairs, and takes the top 1,000 (six pinned titles are
+forced in). Its synopsis is again a metadata sentence.
+
+Verify the current state with `python data/audit_catalog.py`. For the deployment
+catalog it reports per-field coverage, duplicate ids/IMDb ids/title-year pairs,
+malformed records, and coverage of imported IMDb fields. The imported
+`original_title` field was present for the 1,000 IMDb records but wasn't shown
+by the app; cards now display it when it differs from the display title. Its
+value comes directly from IMDb and is not rewritten.
+
+### Current metadata limits and priorities
+
+The deployment catalog's synopsis coverage is not plot coverage: IMDb import
+creates a transparent title/year/genre template, not a plot summary. The audit
+distinguishes those templates from real plot descriptions. Cast, certification
+and original language remain absent unless real enrichment records are bundled.
+No plot, cast or content-descriptor values have been invented to fill those gaps.
+
+TMDB enrichment is opt-in. Both `data/enrich_tmdb.py` and `data/enrich_cast.py`
+return without reading or changing catalog/progress files when `TMDB_API_KEY` is
+unset. With a key present, explicitly running either script activates its
+documented enrichment; no code change is needed to enable it. The audit output
+and JSON report show whether a key is configured at audit time.
+
+The generated-query benchmark is a synthetic prioritization signal, not real
+user feedback. Its 100 held-out queries cover genre, decade, runtime and a
+keyword derived from the source title; they do not test cast or content
+descriptor requests. In the latest held-out run, recall@20 was 0.470, 24.9% of
+returned results missed the benchmark keyword, 1.3% of verified results broke
+any hard constraint, and 68.7% of displayed results were marked unverified.
+That supports prioritizing real plot/keyword coverage when TMDB is available.
+Runtime and year data are already present; the benchmark had zero runtime
+violations and 0.1% decade violations. It cannot justify prioritizing cast or
+content descriptors, which its query templates never ask for.
+
+The audit prints these limitations and priorities, and includes them in its
+JSON report. Re-run the benchmark with `python tests/relevance_benchmark.py`
+after code or catalog changes; do not treat these generated queries as validated
+user behavior.
+
 ### Adding real plot descriptions
 
 TMDB provides real plot overviews. Set a TMDB v3 API key in the terminal and
@@ -84,7 +145,8 @@ existing `synopsis` field, records `plot_source: "TMDB"`, preserves all IMDb
 metadata, and writes progress every 25 records. It never invents a plot when
 TMDB has no overview. Because the catalog is large and TMDB rate limits API
 traffic, the complete enrichment can take a long time; stopping and rerunning
-the command resumes from the progress file.
+the command resumes from the progress file. If the key is absent, it reports
+that enrichment was skipped and leaves all files unchanged.
 
 ### Cast and gender verification
 
@@ -165,6 +227,14 @@ template, browser JavaScript, or committed source:
 | --- | --- | --- |
 | `TMDB_API_KEY` | One-time catalog enrichment only | unset |
 | `TMDB_CATALOG_PATH` | Choosing input for `data/enrich_cast.py`; `deployment` selects the Render catalog | first available local catalog |
+| `REDIS_URL` | Shared search cache and rate limit across workers | unset (process-local state) |
+
+Set `REDIS_URL` to a private Redis connection URL when running multiple
+Gunicorn workers or app instances. Cache entries expire after ten minutes and
+the per-client rate limiter uses a shared sliding 60-second window. If Redis is
+not configured, the app retains its process-local cache and rate limiter; if a
+configured Redis server is temporarily unavailable, it logs a warning and
+falls back to process-local behavior until the shared service recovers.
 
 For a compact Render data build, run from the project root before deploying:
 
@@ -292,7 +362,10 @@ mocking) and prints a pass/fail report, then writes the full table to
 `tests/test_report.md` with: user input, extracted preferences, top
 result, pass/fail, reason for failure, and a suggested improvement.
 
-Current result: **51/51 passing**.
+Current result: **51/51 passing**. These are hand-written example sentences, so
+they are regression tests only and not evidence of search accuracy. Accuracy is
+measured by `python tests/relevance_benchmark.py`, which uses generated queries
+and a held-out split.
 
 ### Structured search regression tests
 

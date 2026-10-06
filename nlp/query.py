@@ -155,13 +155,14 @@ def build_structured_query(raw_query, content_text=None):
     preferences["free_text_keywords"] = [
         word for word in preferences["free_text_keywords"]
         if word not in EXPLICIT_SYNTAX_TOKENS
+        and word not in {"shorter"}
         and not re.fullmatch(r"\d{2,4}s?", word)
         and not re.fullmatch(r"(?:19|20)\d{2}s", word)
     ]
     if preferences["runtime"]["min"] is not None or preferences["runtime"]["max"] is not None or preferences["runtime"]["target"] is not None:
         preferences["free_text_keywords"] = [
             word for word in preferences["free_text_keywords"]
-            if not re.fullmatch(r"\d+(?:\.\d+)?", word) and word not in {"long", "short", "less", "least", "more", "longer"}
+            if not re.fullmatch(r"\d+(?:\.\d+)?", word) and word not in {"long", "short", "shorter", "less", "least", "more", "longer"}
         ]
 
     # A rom-com is explicitly both romance and comedy, not merely romance.

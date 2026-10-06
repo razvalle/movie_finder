@@ -1,8 +1,9 @@
-"""Hand-authored search oracle over the assembled compact movie catalog.
+"""REGRESSION tests over hand-authored example queries against the compact catalog.
 
-Expected titles and constraints are checked against the catalog records below.
-This is an oracle for the current rule-based pipeline, not GPT-era ground truth
-and not a copy of the old Render fallback benchmark.
+These guard against behavior changes for known sentences. They are not accuracy
+evidence; use tests/relevance_benchmark.py (generated queries, held-out split)
+for that. Expected titles are checked against the catalog records below, and
+this is not GPT-era ground truth nor the old Render fallback benchmark.
 """
 
 import ast
@@ -16,25 +17,12 @@ from app import app
 from data.generated_movies import GENERATED_MOVIES
 from nlp.normalize import normalize_text
 from nlp.query import build_structured_query
-from nlp.smart_search import understand_query
+from nlp.smart_search import interpret_query
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 GOLDEN_CASES = [
-    {
-        "query": "90s comedy with a road trip",
-        "title": "Dumb and Dumber",
-        "genres": {"comedy"},
-        "year_range": (1990, 1999),
-        "hard_constraints": {"road trip", "release year"},
-        "unverified": "road trip",
-    },
-    {
-        "query": "animated movie about a rat who cooks",
-        "title": "Ratatouille",
-        "genres": {"animation"},
-        "catalog_evidence": {"rat", "chef", "cook"},
-    },
+    # Road-trip and rat-chef cases removed: they passed only via hard-coded title hints.
     {
         "query": "Groundhog Day 1993 comedy time loop",
         "title": "Groundhog Day",
@@ -158,7 +146,7 @@ class SearchGoldenTests(unittest.TestCase):
                     self.assertEqual([title.decode("utf-8") for title in titles], [case["title"]])
 
                     if "hard_constraints" in case:
-                        understanding = understand_query(case["query"])
+                        understanding = interpret_query(case["query"])
                         self.assertTrue(case["hard_constraints"].issubset(set(understanding["hard_constraints"])))
                     if "unverified" in case:
                         self.assertIn(b"Unverified", response.data)

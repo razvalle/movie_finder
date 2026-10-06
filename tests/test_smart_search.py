@@ -10,7 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from data.generated_movies import GENERATED_MOVIES
-from nlp.smart_search import _query_terms, local_understanding, rerank_candidates, retrieve_candidates, sanitize_understanding, understand_query
+from nlp.smart_search import _query_terms, _similar_movie_terms, local_understanding, rerank_candidates, retrieve_candidates, sanitize_understanding, interpret_query
 
 
 class SmartSearchTests(unittest.TestCase):
@@ -18,7 +18,17 @@ class SmartSearchTests(unittest.TestCase):
         query = local_understanding("recommend me a movie with dwarfs")
         self.assertIn("dwarf", query["keywords"])
         self.assertIn("fantasy", query["expanded_concepts"])
-        self.assertIn("The Lord of the Rings: The Fellowship of the Ring", query["example_titles"])
+        self.assertEqual(query["example_titles"], [])
+
+    def test_similar_to_title_comes_from_the_query_text(self):
+        self.assertEqual(local_understanding("something like Heat but shorter")["similar_to"], "heat")
+        self.assertIsNone(local_understanding("a funny movie")["similar_to"])
+
+    def test_similar_to_expands_from_catalog_record_only_when_title_exists(self):
+        catalog = [{"id": 1, "title": "Zorbo", "genres": ["thriller"], "themes": ["heist"], "keywords": ["Zorbo", "vault"]}]
+        self.assertEqual(_similar_movie_terms({"similar_to": "zorbo"}, catalog), ["thriller", "heist", "vault"])
+        self.assertEqual(_similar_movie_terms({"similar_to": "missing title"}, catalog), [])
+        self.assertEqual(_similar_movie_terms({"similar_to": None}, catalog), [])
 
     def test_decade_and_genre_are_extracted(self):
         query = local_understanding("90s comedy with a road trip")
@@ -69,7 +79,7 @@ class SmartSearchTests(unittest.TestCase):
             "socket.create_connection",
             side_effect=AssertionError("core search must not make network requests"),
         ):
-            understanding = understand_query(query)
+            understanding = interpret_query(query)
             candidates = retrieve_candidates(query, understanding, GENERATED_MOVIES, limit=5)
             results = rerank_candidates(query, candidates, understanding)
 

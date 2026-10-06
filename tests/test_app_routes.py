@@ -191,6 +191,25 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b"Origin unavailable", response.data)
         self.assertNotIn(b"United Arab Emirates", response.data)
 
+    def test_imported_original_title_is_shown_only_when_distinct(self):
+        movie = {
+            "id": 999997, "title": "Display Title", "original_title": "Titre d'origine",
+            "synopsis": "A drama.", "genres": ["drama"], "runtime": 90,
+            "release_year": 2020, "themes": [], "mood_tags": [], "keywords": [],
+            "content_descriptors": [], "notable_awards": [], "origin_regions": [],
+            "average_rating": 7.0, "vote_count": 100,
+        }
+        with patch("app.MOVIES", [movie]):
+            response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Original title", response.data)
+        self.assertIn(b"Titre d&#39;origine", response.data)
+
+        movie["original_title"] = movie["title"]
+        with patch("app.MOVIES", [movie]):
+            response = self.client.get("/")
+        self.assertNotIn(b"Original title", response.data)
+
     def test_commons_poster_url_is_movie_specific_and_host_allowlisted(self):
         commons_url = "https://commons.wikimedia.org/wiki/Special:FilePath/Film_Poster.jpg"
         self.assertEqual(movie_poster_url({"poster_url": commons_url}), commons_url)

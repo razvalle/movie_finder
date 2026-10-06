@@ -11,6 +11,13 @@ from data import enrich_cast
 
 
 class CastEnrichmentTests(unittest.TestCase):
+    def test_missing_api_key_is_inert(self):
+        with patch.dict("os.environ", {}, clear=True), patch.object(enrich_cast, "ensure_dirs") as ensure_dirs, patch.object(
+            enrich_cast, "load_catalog", side_effect=AssertionError("catalog must not be read without the key")
+        ):
+            self.assertEqual(enrich_cast.enrich_catalog(), 0)
+        ensure_dirs.assert_not_called()
+
     def test_deployment_target_is_curated_plus_popular_catalog(self):
         with patch.dict("os.environ", {"TMDB_CATALOG_PATH": "deployment"}):
             catalog = enrich_cast.load_catalog()

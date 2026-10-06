@@ -241,10 +241,11 @@ def compute_cast_fields(cast_entries, top_n=DEFAULT_TOP_CAST_SIZE):
 
 
 def enrich_catalog():
-    ensure_dirs()
     api_key = os.environ.get("TMDB_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("Set TMDB_API_KEY before running enrich-cast.")
+        print("TMDB cast enrichment skipped: TMDB_API_KEY is not configured; catalog unchanged.")
+        return 0
+    ensure_dirs()
     catalog = load_catalog()
     progress_data = json.loads(PROGRESS_PATH.read_text(encoding="utf-8")) if PROGRESS_PATH.exists() else {}
     if "_status" in progress_data:

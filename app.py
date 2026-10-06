@@ -37,7 +37,7 @@ from nlp.tfidf import load_or_build_tfidf_model
 from nlp.scoring import is_excluded, rank_movies
 from nlp.explain import explain_match, title_case
 from nlp.conversation import build_assistant_message
-from nlp.smart_search import MAX_CANDIDATES, allow_search, understand_query, retrieve_candidates, rerank_candidates
+from nlp.smart_search import MAX_CANDIDATES, allow_search, interpret_query, retrieve_candidates, rerank_candidates
 from nlp.cast_verification import classify_cast_gender, evaluate_cast_constraint
 
 app = Flask(__name__)
@@ -377,41 +377,100 @@ def has_unsupported_negated_requirement(query):
     ))
 
 
+def drop_constraints(preferences, understanding, drops):
+    """Remove user-dismissed constraints from the parsed query before searching."""
+    lists = {
+        "genre": ("genres", "genres"), "mood": ("moods", "mood_tone"),
+        "theme": ("themes", None), "exclude_genre": ("excluded_genres", "exclusions"),
+        "exclude_mood": ("excluded_moods", "exclusions"), "exclude_theme": ("excluded_themes", None),
+    }
+    for drop in drops:
+        kind, _, value = drop.partition(":")
+        if kind in lists:
+            pref_key, understanding_key = lists[kind]
+            preferences[pref_key] = [item for item in preferences[pref_key] if item != value]
+            if understanding and understanding_key:
+                understanding[understanding_key] = [item for item in understanding[understanding_key] if item != value]
+            if understanding and kind == "genre":
+                understanding["filters"]["genres"] = [g for g in understanding["filters"]["genres"] if g != value]
+            if understanding and kind.startswith("exclude"):
+                understanding["hard_constraints"] = [c for c in understanding["hard_constraints"] if c != f"exclude {value}"]
+        elif kind == "runtime":
+            preferences["runtime"] = {**preferences["runtime"], "min": None, "max": None, "target": None}
+        elif kind == "year":
+            preferences["release_year"] = None
+            if understanding:
+                understanding["year_range"] = {"from": None, "to": None}
+                understanding["filters"]["year_range"] = {"from": None, "to": None}
+                understanding["hard_constraints"] = [c for c in understanding["hard_constraints"] if c != "release year"]
+
+
+def movie_matches_runtime_limits(movie, preferences):
+    """Hard check for explicit min/max runtime; unknown runtime (stored as 0) cannot satisfy a limit."""
+    runtime = (preferences or {}).get("runtime") or {}
+    low, high = runtime.get("min"), runtime.get("max")
+    if low is None and high is None:
+        return True
+    length = movie.get("runtime") or 0
+    return length > 0 and (low is None or length >= low) and (high is None or length <= high)
+
+
+def describe_tag(tag):
+    """Plain-language phrase for a removable tag, e.g. 'under 100 min' or '1990s'."""
+    label, value = tag["label"], tag["value"]
+    if label == "Exclude":
+        return f"excluding {value.lower()}"
+    if label == "Runtime":
+        if value.startswith("<"):
+            return f"under {value[1:].strip()}"
+        if value.startswith(">"):
+            return f"over {value[1:].strip()}"
+        if value.startswith("~"):
+            return f"about {value[1:].strip()}"
+        return value
+    if label == "Year":
+        span = re.fullmatch(r"(\d{4})-(\d{4})", value)
+        if span and int(span.group(1)) % 10 == 0 and int(span.group(2)) == int(span.group(1)) + 9:
+            return f"{span.group(1)}s"
+        return f"from {value}" if span else value
+    return value.lower()
+
+
 def build_preference_tags(preferences, excluded_count):
     """Turns the preference dict into a list of small display tags for the template."""
     tags = []
 
     for g in preferences["genres"]:
-        tags.append({"type": "include", "label": "Genre", "value": title_case(g)})
+        tags.append({"type": "include", "label": "Genre", "value": title_case(g), "key": f"genre:{g}"})
     for m in preferences["moods"]:
-        tags.append({"type": "include", "label": "Mood", "value": title_case(m)})
+        tags.append({"type": "include", "label": "Mood", "value": title_case(m), "key": f"mood:{m}"})
     for t in preferences["themes"]:
-        tags.append({"type": "include", "label": "Theme", "value": title_case(t)})
+        tags.append({"type": "include", "label": "Theme", "value": title_case(t), "key": f"theme:{t}"})
     for g in preferences["excluded_genres"]:
-        tags.append({"type": "exclude", "label": "Exclude", "value": title_case(g)})
+        tags.append({"type": "exclude", "label": "Exclude", "value": title_case(g), "key": f"exclude_genre:{g}"})
     for m in preferences["excluded_moods"]:
-        tags.append({"type": "exclude", "label": "Exclude", "value": title_case(m)})
+        tags.append({"type": "exclude", "label": "Exclude", "value": title_case(m), "key": f"exclude_mood:{m}"})
     for t in preferences["excluded_themes"]:
-        tags.append({"type": "exclude", "label": "Exclude", "value": title_case(t)})
+        tags.append({"type": "exclude", "label": "Exclude", "value": title_case(t), "key": f"exclude_theme:{t}"})
 
     rt = preferences["runtime"]
     if rt["max"] is not None and rt["min"] is not None:
-        tags.append({"type": "neutral", "label": "Runtime", "value": f"{rt['min']}-{rt['max']} min"})
+        tags.append({"type": "neutral", "label": "Runtime", "value": f"{rt['min']}-{rt['max']} min", "key": "runtime"})
     elif rt["max"] is not None:
-        tags.append({"type": "neutral", "label": "Runtime", "value": f"< {rt['max']} min"})
+        tags.append({"type": "neutral", "label": "Runtime", "value": f"< {rt['max']} min", "key": "runtime"})
     elif rt["min"] is not None:
-        tags.append({"type": "neutral", "label": "Runtime", "value": f"> {rt['min']} min"})
+        tags.append({"type": "neutral", "label": "Runtime", "value": f"> {rt['min']} min", "key": "runtime"})
     elif rt["target"] is not None:
-        tags.append({"type": "neutral", "label": "Runtime", "value": f"~ {rt['target']} min"})
+        tags.append({"type": "neutral", "label": "Runtime", "value": f"~ {rt['target']} min", "key": "runtime"})
 
     ry = preferences["release_year"]
     if ry:
         if ry["min"] and ry["max"]:
-            tags.append({"type": "neutral", "label": "Year", "value": f"{ry['min']}-{ry['max']}"})
+            tags.append({"type": "neutral", "label": "Year", "value": f"{ry['min']}-{ry['max']}", "key": "year"})
         elif ry["min"]:
-            tags.append({"type": "neutral", "label": "Year", "value": f"after {ry['min']}"})
+            tags.append({"type": "neutral", "label": "Year", "value": f"after {ry['min']}", "key": "year"})
         elif ry["max"]:
-            tags.append({"type": "neutral", "label": "Year", "value": f"before {ry['max']}"})
+            tags.append({"type": "neutral", "label": "Year", "value": f"before {ry['max']}", "key": "year"})
 
     if preferences["free_text_keywords"]:
         tags.append({
@@ -466,7 +525,7 @@ def index():
     if title_only_intent:
         if not selected_genre:
             effective_nationality = ""
-    understanding = understand_query(query) if query else None
+    understanding = interpret_query(query) if query else None
     try:
         per_page = int(request.args.get("per_page", DEFAULT_PER_PAGE))
     except ValueError:
@@ -503,6 +562,13 @@ def index():
             if excluded_genre in genres and excluded_genre not in query_preferences["excluded_genres"]:
                 query_preferences["excluded_genres"].append(excluded_genre)
 
+    dropped = request.args.getlist("drop")
+    if dropped and query_preferences:
+        drop_constraints(query_preferences, understanding, dropped)
+        dropped_genres = {d.partition(":")[2] for d in dropped if d.startswith("genre:")}
+        query_genres = [genre for genre in query_genres if genre not in dropped_genres]
+        llm_year_range = understanding["year_range"]
+
     year_constraint = query_preferences["release_year"] if query_preferences else None
 
     def matching_base_filters(movie):
@@ -515,10 +581,12 @@ def index():
 
     base_movies = [movie for movie in MOVIES if matching_base_filters(movie)]
 
-    def search_pool(include_genres=True, include_year=True, include_rating=True, include_cast=True):
+    def search_pool(include_genres=True, include_year=True, include_rating=True, include_cast=True, include_runtime=True):
         pool = []
         for movie in base_movies:
             if include_genres and query_genres and not any(genre in movie["genres"] for genre in query_genres):
+                continue
+            if include_runtime and not movie_matches_runtime_limits(movie, query_preferences):
                 continue
             if query_preferences and is_excluded(movie, query_preferences):
                 continue
@@ -540,12 +608,12 @@ def index():
             filtered_movies = relaxed_year_rating
             search_notice = "Showing closest matches; year or rating limits were relaxed."
         elif query_genres and not selected_genre:
-            relaxed_genre = search_pool(include_genres=False, include_year=False, include_rating=False)
+            relaxed_genre = search_pool(include_genres=False, include_year=False, include_rating=False, include_runtime=False)
             if relaxed_genre:
                 filtered_movies = relaxed_genre
-                search_notice = "Showing closest matches; genre, year, or rating limits were relaxed."
+                search_notice = "Showing closest matches; genre, year, rating, or runtime limits were relaxed."
         if not filtered_movies:
-            filtered_movies = search_pool(include_genres=False, include_year=False, include_rating=False)
+            filtered_movies = search_pool(include_genres=False, include_year=False, include_rating=False, include_runtime=False)
             if filtered_movies:
                 search_notice = "Showing closest matches; descriptive filters were relaxed."
         if not filtered_movies and query_preferences and query_preferences.get("cast_gender"):
@@ -553,11 +621,13 @@ def index():
                 include_genres=False,
                 include_year=False,
                 include_rating=False,
+                include_runtime=False,
                 include_cast=False,
             )
 
     context = {
         "query": query,
+        "dropped": dropped,
         "feedback_saved": request.args.get("feedback") == "saved",
         "selected_genre": selected_genre,
         "selected_language": selected_language,
@@ -652,7 +722,10 @@ def index():
             ranking_preferences["genres"] = []
             ranking_preferences["moods"] = []
             ranking_preferences["themes"] = []
-        candidates = retrieve_candidates(query, understanding, search_movies, TFIDF_MODEL)
+        retrieval_understanding = dict(understanding)
+        if title_matches:
+            retrieval_understanding["required_terms"] = []
+        candidates = retrieve_candidates(query, retrieval_understanding, search_movies, TFIDF_MODEL)
         has_structured_constraint = bool(query_preferences and (
             query_preferences.get("cast_gender")
             or query_preferences.get("excluded_genres")
@@ -772,8 +845,8 @@ def index():
                 search_notice += " Missing or unverified: " + "; ".join(missing[:3]) + "."
             if relaxation_note:
                 search_notice += " " + relaxation_note
-        if any(entry["verification_fallback"] for entry in all_results) or not understanding.get("llm_used"):
-            fallback_notice = "Smart matching is unavailable right now, showing basic results."
+        if any(entry["verification_fallback"] for entry in all_results):
+            fallback_notice = "Some results could not be fully verified against the catalog's metadata."
             search_notice = f"{fallback_notice} {search_notice}" if search_notice else fallback_notice
         missing_requirements = list(dict.fromkeys(
             item for entry in all_results
@@ -791,7 +864,12 @@ def index():
             missing_requirements=missing_requirements,
         )
         context.update({
-            "preference_tags": build_preference_tags(ranking_preferences, ranking["excluded_count"]),
+            "preference_tags": [
+                {**tag, "phrase": describe_tag(tag), "remove_url": url_for("index", **{
+                    **request.args.to_dict(flat=False), "drop": dropped + [tag["key"]], "page": 1,
+                })} if "key" in tag else tag
+                for tag in build_preference_tags(ranking_preferences, ranking["excluded_count"])
+            ],
             "results": display_results,
             "searched": True,
             "result_count": len(all_results),

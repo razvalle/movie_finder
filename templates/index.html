@@ -92,6 +92,24 @@
           </ul>
         {% endif %}
       </div>
+      {% if preference_tags %}
+        {% set removable = preference_tags | selectattr('remove_url') | list %}
+        {% if removable %}
+          <p class="interpretation">I understood:
+            {% for tag in removable %}
+              <span class="interpretation__part">{{ tag.phrase }}<a class="pref-tag__remove" href="{{ tag.remove_url }}" aria-label="Remove {{ tag.phrase }}" title="Remove">&times;</a></span>{{ ',' if not loop.last else '.' }}
+            {% endfor %}
+          </p>
+        {% endif %}
+        <div class="preferences__grid" aria-label="Understood criteria">
+          {% for tag in preference_tags %}
+            <span class="pref-tag pref-tag--{{ tag.type }}">
+              <span class="pref-tag__label">{{ tag.label }}</span>{{ tag.value }}
+              {% if tag.remove_url %}<a class="pref-tag__remove" href="{{ tag.remove_url }}" aria-label="Remove {{ tag.label }} {{ tag.value }}" title="Remove">&times;</a>{% endif %}
+            </span>
+          {% endfor %}
+        </div>
+      {% endif %}
     </section>
 
     {% if debug_enabled and debug_view %}
@@ -152,6 +170,7 @@
                     {% if r.show_unverified_badge %}<span class="match-badge match-badge--unverified" data-i18n="unverified">Unverified</span>{% endif %}
                   </div>
                   <h3 class="movie-card__title">{{ r.movie.title }}</h3>
+                  {% if r.movie.get('original_title') and r.movie.original_title != r.movie.title %}<div class="movie-card__meta"><span data-i18n="originalTitle">Original title</span>: <span lang="und">{{ r.movie.original_title }}</span></div>{% endif %}
                   <div class="movie-card__meta">{{ r.genres_display }} · {{ r.movie.runtime }} min · {{ r.movie.release_year }}</div>
                   <div class="movie-card__meta">{% if movie_origin_label(r.movie) %}<span data-i18n="originLabel">Origin</span>: {{ movie_origin_label(r.movie) }}{% else %}<span data-i18n="originUnavailable">Origin unavailable</span>{% endif %}</div>
                   {% if r.movie.get('certification') %}<span class="movie-age-rating" data-i18n="contentRating">Age rating</span><span class="movie-age-rating__value">{{ r.movie.certification }}</span>{% endif %}
@@ -206,6 +225,7 @@
                 </div>
                 <div class="movie-card__content">
                   <h3 class="movie-card__title">{{ movie.title }}</h3>
+                  {% if movie.get('original_title') and movie.original_title != movie.title %}<div class="movie-card__meta"><span data-i18n="originalTitle">Original title</span>: <span lang="und">{{ movie.original_title }}</span></div>{% endif %}
                   <div class="movie-card__meta">{{ movie.genres | map('title') | join(', ') }} · {{ movie.runtime }} min · {{ movie.release_year }}
                     {% if movie_origin_label(movie) %} · <span data-i18n="originLabel">Origin</span>: {{ movie_origin_label(movie) }}{% else %} · <span data-i18n="originUnavailable">Origin unavailable</span>{% endif %}
                   </div>
@@ -231,11 +251,11 @@
         {% if total_pages > 1 %}
           <nav class="pagination" aria-label="Movie pages" data-i18n-aria="paginationLabel">
             {% if page_number > 1 %}
-              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, awards='winners' if award_filter else '', per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '', language=selected_language) }}" data-i18n="previousPage">Previous</a>
+              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, awards='winners' if award_filter else '', per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '', language=selected_language, drop=dropped) }}" data-i18n="previousPage">Previous</a>
             {% endif %}
             <span data-i18n-page data-current-page="{{ page_number }}" data-total-pages="{{ total_pages }}">Page {{ page_number }} of {{ total_pages }}</span>
             {% if page_number < total_pages %}
-              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, awards='winners' if award_filter else '', per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '', language=selected_language) }}" data-i18n="nextPage">Next</a>
+              <a href="{{ url_for('index', q=query, genre=selected_genre, nationality=selected_nationality, awards='winners' if award_filter else '', per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '', language=selected_language, drop=dropped) }}" data-i18n="nextPage">Next</a>
             {% endif %}
           </nav>
         {% endif %}

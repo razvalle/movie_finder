@@ -259,53 +259,59 @@
     en: {
       pageCount: "Page {page} of {total}",
       paginationLabel: "Movie pages",
+      originalTitle: "Original title",
       genreFilterConflict: "The selected genre filter overrides the genre in your search.",
       countryFilterConflict: "The country in your search overrides the country filter.",
     },
     es: {
       pageCount: "Página {page} de {total}",
       paginationLabel: "Páginas de películas",
+      originalTitle: "Título original",
       genreFilterConflict: "El filtro de género seleccionado tiene prioridad sobre el género de la búsqueda.",
       countryFilterConflict: "El país de la búsqueda tiene prioridad sobre el filtro de país.",
     },
     tl: {
       pageCount: "Pahina {page} ng {total}",
       paginationLabel: "Mga pahina ng pelikula",
+      originalTitle: "Orihinal na pamagat",
       genreFilterConflict: "Masusunod ang napiling genre filter kaysa sa genre sa paghahanap.",
       countryFilterConflict: "Masusunod ang bansang nasa paghahanap kaysa sa country filter.",
     },
     fr: {
       pageCount: "Page {page} sur {total}",
       paginationLabel: "Pages des films",
+      originalTitle: "Titre original",
       genreFilterConflict: "Le genre sélectionné remplace celui de la recherche.",
       countryFilterConflict: "Le pays de la recherche remplace le filtre de pays.",
     },
     de: {
       pageCount: "Seite {page} von {total}",
       paginationLabel: "Filmseiten",
+      originalTitle: "Originaltitel",
       genreFilterConflict: "Das ausgewählte Genre ersetzt das Genre aus der Suche.",
       countryFilterConflict: "Das Land aus der Suche ersetzt den Länderfilter.",
     },
     pt: {
       pageCount: "Página {page} de {total}",
       paginationLabel: "Páginas de filmes",
+      originalTitle: "Título original",
       genreFilterConflict: "O gênero selecionado substitui o gênero da busca.",
       countryFilterConflict: "O país da busca substitui o filtro de país.",
     },
     ja: {
-      pageCount: "{total} ページ中 {page} ページ", paginationLabel: "映画ページ", genreFilterConflict: "選択したジャンルが検索のジャンルより優先されます。",
+      pageCount: "{total} ページ中 {page} ページ", paginationLabel: "映画ページ", originalTitle: "原題", genreFilterConflict: "選択したジャンルが検索のジャンルより優先されます。",
       countryFilterConflict: "検索で指定した国が国フィルターより優先されます。",
     },
     ko: {
-      pageCount: "{total}페이지 중 {page}페이지", paginationLabel: "영화 페이지", genreFilterConflict: "선택한 장르가 검색어의 장르보다 우선합니다。",
+      pageCount: "{total}페이지 중 {page}페이지", paginationLabel: "영화 페이지", originalTitle: "원제", genreFilterConflict: "선택한 장르가 검색어의 장르보다 우선합니다。",
       countryFilterConflict: "검색어의 국가가 국가 필터보다 우선합니다。",
     },
     zh: {
-      pageCount: "第 {page} 页，共 {total} 页", paginationLabel: "电影分页", genreFilterConflict: "所选类型优先于搜索中的类型。",
+      pageCount: "第 {page} 页，共 {total} 页", paginationLabel: "电影分页", originalTitle: "原名", genreFilterConflict: "所选类型优先于搜索中的类型。",
       countryFilterConflict: "搜索中的国家优先于国家筛选条件。",
     },
     hi: {
-      pageCount: "पृष्ठ {page} / {total}", paginationLabel: "फ़िल्म पृष्ठ", genreFilterConflict: "चुनी गई शैली खोज की शैली पर प्राथमिकता रखती है।",
+      pageCount: "पृष्ठ {page} / {total}", paginationLabel: "फ़िल्म पृष्ठ", originalTitle: "मूल शीर्षक", genreFilterConflict: "चुनी गई शैली खोज की शैली पर प्राथमिकता रखती है।",
       countryFilterConflict: "खोज का देश देश फ़िल्टर पर प्राथमिकता रखता है।",
     },
   };

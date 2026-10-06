@@ -47,7 +47,8 @@ def find_tmdb_movie(imdb_id, api_key):
 def enrich_catalog():
     api_key = os.environ.get("TMDB_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("Set the TMDB_API_KEY environment variable before running this script.")
+        print("TMDB enrichment skipped: TMDB_API_KEY is not configured; catalog unchanged.")
+        return 0
     if not CATALOG_PATH.exists():
         raise FileNotFoundError(f"Missing catalog: {CATALOG_PATH}")
 

@@ -1,10 +1,14 @@
 """Rule-based query understanding and lightweight hybrid retrieval."""
 
 import copy
+import hashlib
 import gzip
 import json
+import logging
 import math
+import os
 import re
+import secrets
 import threading
 import time
 from collections import Counter, OrderedDict, defaultdict, deque
@@ -25,6 +29,10 @@ CACHE_SECONDS = 600
 CACHE_SIZE = 512
 RATE_LIMIT_REQUESTS = 30
 RATE_LIMIT_WINDOW_SECONDS = 60
+_REDIS_CLIENT = None
+_REDIS_URL = None
+_REDIS_LOCK = threading.Lock()
+_LOGGER = logging.getLogger(__name__)
 
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
@@ -32,6 +40,45 @@ _RATE_LIMITS = defaultdict(deque)
 _RATE_LIMIT_LOCK = threading.Lock()
 _BM25_CACHE = {}
 _BM25_LOCK = threading.Lock()
+
+_RATE_LIMIT_SCRIPT = """
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local maximum = tonumber(ARGV[3])
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now - window)
+local count = redis.call('ZCARD', KEYS[1])
+if count >= maximum then return 0 end
+redis.call('ZADD', KEYS[1], now, ARGV[4])
+redis.call('PEXPIRE', KEYS[1], window)
+return 1
+"""
+
+
+def _redis_client():
+    global _REDIS_CLIENT, _REDIS_URL
+    redis_url = os.environ.get("REDIS_URL", "").strip()
+    if not redis_url:
+        return None
+    with _REDIS_LOCK:
+        if _REDIS_URL != redis_url:
+            try:
+                import redis
+                _REDIS_CLIENT = redis.Redis.from_url(redis_url, decode_responses=True)
+                _REDIS_URL = redis_url
+            except ImportError:
+                _LOGGER.warning("REDIS_URL is set, but the redis package is unavailable; using process-local state.")
+                return None
+        return _REDIS_CLIENT
+
+
+def _shared_key(namespace, value):
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return f"movie-finder:{namespace}:{hashlib.sha256(encoded).hexdigest()}"
+
+SIMILAR_TO_PATTERN = re.compile(
+    r"\b(?:similar to|something like|(?:movies?|films?) like|like)\s+([a-z0-9][a-z0-9 :'&-]{1,60}?)"
+    r"(?=\s+(?:but|with|without|that|from|in|and|except)\b|$)"
+)
 
 GENRE_ALIASES = {
     "science fiction": "sci-fi", "science-fiction": "sci-fi", "sci fi": "sci-fi",
@@ -45,55 +92,41 @@ LOCAL_CONCEPTS = [
         "pattern": r"\b(?:dwarfs?|dwarves|dwarf|little people)\b",
         "keywords": ["dwarf", "dwarves", "little people"],
         "expanded_concepts": ["hobbit", "Middle-earth", "fantasy", "mines", "fairy tale"],
-        "example_titles": ["The Lord of the Rings: The Fellowship of the Ring", "The Hobbit: An Unexpected Journey"],
     },
     {
         "pattern": r"\brobot\b.*\b(?:love|romance|falls for|falls in love)\b|\b(?:love|romance)\b.*\brobot\b",
         "keywords": ["robot", "artificial intelligence", "romance"],
         "expanded_concepts": ["android", "human-machine relationship", "science fiction"],
-        "example_titles": ["WALL-E", "Her", "The Wild Robot"],
     },
     {
         "pattern": r"\b(?:road trip|roadtrip)\b",
         "keywords": ["road trip", "journey", "travel"],
         "expanded_concepts": ["comedy", "friends", "cross-country trip"],
-        "example_titles": ["Dumb and Dumber", "Little Miss Sunshine", "Thelma & Louise"],
-    },
-    {
-        "pattern": r"\b(?:like|similar to)\s+inception\b",
-        "keywords": ["dream", "reality", "mind-bending"],
-        "expanded_concepts": ["layered reality", "memory", "nonlinear science fiction"],
-        "example_titles": ["Inception", "The Prestige", "Memento", "Tenet"],
     },
     {
         "pattern": r"\b(?:same day|over and over|repeats? the same day|time loop|relives?)\b",
         "keywords": ["time loop", "repeating day", "reliving the same day"],
         "expanded_concepts": ["time loop", "temporal repetition", "resetting timeline"],
-        "example_titles": ["Groundhog Day", "Palm Springs", "Edge of Tomorrow"],
     },
     {
         "pattern": r"\b(?:space|spaceship|outer space)\b.*\b(?:scary|horror|terrifying|alien)\b|\b(?:scary|horror)\b.*\b(?:space|spaceship|outer space)\b",
         "keywords": ["space horror", "alien", "spaceship"],
         "expanded_concepts": ["deep space", "isolated crew", "extraterrestrial threat"],
-        "example_titles": ["Alien", "Event Horizon", "The Thing"],
     },
     {
         "pattern": r"\b(?:rat|mouse)\b.*\b(?:cook(?:s|ing)?|chef)\b|\b(?:cook(?:s|ing)?|chef)\b.*\b(?:rat|mouse)\b",
         "keywords": ["rat chef", "cooking", "restaurant"],
         "expanded_concepts": ["animated culinary story", "Paris kitchen", "ambitious chef"],
-        "example_titles": ["Ratatouille"],
     },
     {
         "pattern": r"\bchess\b.*\b(?:prodigy|genius|young|child|player)\b|\b(?:prodigy|genius)\b.*\bchess\b",
         "keywords": ["chess", "prodigy", "young chess player"],
         "expanded_concepts": ["tournament", "chess master", "coming of age"],
-        "example_titles": ["Searching for Bobby Fischer", "Queen of Katwe"],
     },
     {
         "pattern": r"\b(?:dragon|dragons|drgons)\b",
         "keywords": ["dragon", "dragons"],
         "expanded_concepts": ["fantasy", "mythical creature", "fire-breathing"],
-        "example_titles": ["How to Train Your Dragon", "The Hobbit: An Unexpected Journey"],
     },
 ]
 
@@ -112,6 +145,13 @@ STOP_WORDS = {
 
 
 def _cache_get(key):
+    client = _redis_client()
+    if client:
+        try:
+            encoded = client.get(_shared_key("cache", key))
+            return json.loads(encoded) if encoded is not None else None
+        except Exception as error:
+            _LOGGER.warning("Shared search cache unavailable; using process-local cache: %s", error)
     now = time.monotonic()
     with _CACHE_LOCK:
         entry = _CACHE.get(key)
@@ -126,6 +166,12 @@ def _cache_get(key):
 
 
 def _cache_set(key, value):
+    client = _redis_client()
+    if client:
+        try:
+            client.setex(_shared_key("cache", key), CACHE_SECONDS, json.dumps(value, separators=(",", ":")))
+        except Exception as error:
+            _LOGGER.warning("Shared search cache unavailable; using process-local cache: %s", error)
     with _CACHE_LOCK:
         _CACHE[key] = (time.monotonic() + CACHE_SECONDS, copy.deepcopy(value))
         _CACHE.move_to_end(key)
@@ -135,6 +181,18 @@ def _cache_set(key, value):
 
 def allow_search(client_id):
     """Allow a bounded number of search requests per client per minute."""
+    client = _redis_client()
+    if client:
+        now_ms = int(time.time() * 1000)
+        window_ms = RATE_LIMIT_WINDOW_SECONDS * 1000
+        key = _shared_key("rate", client_id)
+        try:
+            return bool(client.eval(
+                _RATE_LIMIT_SCRIPT, 1, key, now_ms, window_ms,
+                RATE_LIMIT_REQUESTS, f"{now_ms}:{secrets.token_hex(8)}",
+            ))
+        except Exception as error:
+            _LOGGER.warning("Shared search rate limit unavailable; using process-local limit: %s", error)
     now = time.monotonic()
     with _RATE_LIMIT_LOCK:
         events = _RATE_LIMITS[client_id]
@@ -195,7 +253,7 @@ def sanitize_understanding(value, raw_query):
         "verification_notes": value.get("verification_notes", "")[:500]
         if isinstance(value.get("verification_notes"), str) else "",
         "filters": _sanitize_filters(value.get("filters")),
-        "llm_used": True,
+        "rule_based": True,
     }
 
 
@@ -208,6 +266,16 @@ def _sanitize_genres(value):
         if canonical and canonical not in cleaned:
             cleaned.append(canonical)
     return cleaned
+
+
+def _sanitize_runtime(value):
+    if not isinstance(value, dict):
+        value = {}
+    runtime = {}
+    for key in ("min", "max", "target"):
+        number = value.get(key)
+        runtime[key] = number if isinstance(number, int) and not isinstance(number, bool) and 0 < number <= 600 else None
+    return runtime
 
 
 def _sanitize_filters(value):
@@ -223,6 +291,7 @@ def _sanitize_filters(value):
         "genres": _sanitize_genres(value.get("genres")),
         "year_range": {"from": _year_value(year_range.get("from")), "to": _year_value(year_range.get("to"))},
         "min_rating": float(min_rating) if min_rating is not None else None,
+        "runtime": _sanitize_runtime(value.get("runtime")),
     }
 
 
@@ -241,14 +310,14 @@ def local_understanding(raw_query):
     silent_request = bool(re.search(r"\bsilent(?:\s+(?:film|movie))?\b", normalize_text(raw_query)))
     black_and_white_request = bool(re.search(r"\bblack\s+and\s+white\b|\bblack-and-white\b", normalize_text(raw_query)))
     concepts = []
-    example_titles = []
     normalized = normalize_text(raw_query)
+    required_terms = list(keywords)
     road_trip_request = bool(re.search(r"\broad(?:\s+|-)?trip\b", normalized))
     for item in LOCAL_CONCEPTS:
         if re.search(item["pattern"], normalized, re.IGNORECASE):
             keywords.extend(item["keywords"])
             concepts.extend(item["expanded_concepts"])
-            example_titles.extend(item["example_titles"])
+            required_terms = []  # a synonym-table concept stands in for the literal words
 
     decade = re.search(r"\b(\d{2})s\b", normalized)
     if decade:
@@ -261,16 +330,21 @@ def local_understanding(raw_query):
         " ", normalized, flags=re.IGNORECASE,
     )
     core_intent = " ".join(core_intent.split())[:300]
+    similar_match = SIMILAR_TO_PATTERN.search(normalized)
+    similar_to_title = similar_match.group(1).strip() if similar_match else None
+    if similar_to_title:
+        required_terms = []
     return {
         "core_intent": core_intent or raw_query[:300],
+        "required_terms": required_terms[:6],
         "keywords": list(dict.fromkeys(keywords))[:12],
         "expanded_concepts": list(dict.fromkeys(concepts))[:12],
-        "example_titles": list(dict.fromkeys(example_titles))[:12],
+        "example_titles": [],
         "genres": preferences["genres"],
         "mood_tone": preferences["moods"],
         "year_range": {"from": year.get("min"), "to": year.get("max")},
         "min_rating": None,
-        "similar_to": "Inception" if re.search(r"\blike inception\b", normalized) else None,
+        "similar_to": similar_to_title,
         "exclusions": preferences["excluded_genres"] + preferences["excluded_moods"],
         "language_detected": "en",
         "alternative_queries": [],
@@ -300,12 +374,17 @@ def local_understanding(raw_query):
             "genres": preferences["genres"],
             "year_range": {"from": year.get("min"), "to": year.get("max")},
             "min_rating": None,
+            "runtime": {
+                "min": preferences["runtime"].get("min"),
+                "max": preferences["runtime"].get("max"),
+                "target": preferences["runtime"].get("target"),
+            },
         },
-        "llm_used": True,
+        "rule_based": True,
     }
 
 
-def understand_query(raw_query):
+def interpret_query(raw_query):
     raw_query = raw_query[:MAX_QUERY_LENGTH]
     cache_key = ("understand", raw_query.casefold())
     cached = _cache_get(cache_key)
@@ -368,8 +447,6 @@ def _get_bm25_index(movies):
 def _query_terms(raw_query, understanding):
     sources = [_remove_negated_concepts(raw_query), _remove_negated_concepts(understanding["core_intent"]), *understanding["keywords"],
                *understanding["expanded_concepts"], *understanding["example_titles"]]
-    if understanding["similar_to"]:
-        sources.append(understanding["similar_to"])
     words = simple_word_tokens(" ".join(sources))
     return list(dict.fromkeys(
         word for word in words
@@ -451,8 +528,6 @@ def _bm25_scores(terms, index):
 
 def _title_scores(understanding, movies):
     hints = list(understanding["example_titles"])
-    if understanding["similar_to"]:
-        hints.append(understanding["similar_to"])
     scores = defaultdict(float)
     for hint in hints:
         normalized_hint = re.sub(r"[^a-z0-9]+", " ", hint.casefold()).strip()
@@ -471,11 +546,25 @@ def _title_scores(understanding, movies):
     return scores
 
 
+def _similar_movie_terms(understanding, movies):
+    """Terms from the catalog record the user named with 'like X'; empty if X is not a catalog title."""
+    wanted = re.sub(r"[^a-z0-9]+", " ", (understanding.get("similar_to") or "").casefold()).strip()
+    if not wanted:
+        return []
+    for movie in movies:
+        if re.sub(r"[^a-z0-9]+", " ", movie.get("title", "").casefold()).strip() == wanted:
+            title_words = set(simple_word_tokens(movie["title"]))
+            text = " ".join([*movie.get("genres", []), *movie.get("themes", []), *movie.get("keywords", [])])
+            return [w for w in dict.fromkeys(simple_word_tokens(text)) if w not in STOP_WORDS and w not in title_words]
+    return []
+
+
 def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limit=MAX_CANDIDATES):
     """Rank candidates with local lexical similarity and title/entity hints."""
     if not movies:
         return []
     terms = _query_terms(raw_query, understanding)
+    terms = list(dict.fromkeys(terms + _similar_movie_terms(understanding, movies)))
     raw_terms = _raw_query_terms(raw_query)
     lexical_scores = {}
     if len(movies) <= 5000:
@@ -520,8 +609,11 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
         vocabulary = lexical_index["vocabulary"] if len(movies) <= 5000 else tfidf_model["idf"].keys()
         fuzzy_map = _fuzzy_term_map(raw_terms, vocabulary)
         qualified = {}
+        required = [fuzzy_map.get(term, term) for term in understanding.get("required_terms") or []]
         for position, score in fused_scores.items():
             movie_terms = set(simple_word_tokens(_movie_text(movies[position])))
+            if required and title_scores.get(position, 0) < 0.85 and not all(term in movie_terms for term in required):
+                continue
             matched_count = sum(1 for term in raw_terms if fuzzy_map[term] in movie_terms)
             if "road trip" in understanding.get("hard_constraints", []):
                 searchable_text = normalize_text(_movie_text(movies[position]))
@@ -568,6 +660,7 @@ def _basic_assessment(raw_query, candidate, understanding):
     satisfied = []
     unsatisfied = []
     unverifiable = []
+    movie_terms = set(simple_word_tokens(_movie_text(movie)))
     filters = understanding.get("filters", {})
     year_range = filters.get("year_range", {})
     lower_year = year_range.get("from")
@@ -585,6 +678,15 @@ def _basic_assessment(raw_query, candidate, understanding):
             satisfied.append(f"{genre} genre")
         else:
             unsatisfied.append(f"{genre} genre")
+
+    runtime = filters.get("runtime", {})
+    runtime_min, runtime_max = runtime.get("min"), runtime.get("max")
+    if runtime_min is not None or runtime_max is not None:
+        length = movie.get("runtime") or 0
+        if length > 0 and (runtime_min is None or length >= runtime_min) and (runtime_max is None or length <= runtime_max):
+            satisfied.append(f"runtime {length} minutes")
+        else:
+            unsatisfied.append("requested runtime")
 
     descriptors = {normalize_text(value) for value in movie.get("content_descriptors", [])}
     for constraint in hard_constraints:
@@ -613,9 +715,13 @@ def _basic_assessment(raw_query, candidate, understanding):
         else:
             unverifiable.append(constraint)
 
-    movie_terms = set(simple_word_tokens(_movie_text(movie)))
     query_terms = _query_terms(raw_query, understanding)
     matched = [term for term in query_terms if term in movie_terms and term not in STOP_WORDS]
+    for term in understanding.get("required_terms", []):
+        if term in movie_terms:
+            satisfied.append(f"keyword {term}")
+        else:
+            unverifiable.append(f"keyword {term}")
     reason_parts = []
     if satisfied:
         reason_parts.append("It meets " + ", ".join(satisfied[:2]))
@@ -627,14 +733,19 @@ def _basic_assessment(raw_query, candidate, understanding):
     reason = "; ".join(reason_parts) + "." if reason_parts else _fallback_reason(movie, query_terms, understanding)
     if not reason.endswith("."):
         reason += "."
+    # Overlap terms are retrieval evidence, not checked constraints.
+    checked = bool(satisfied or unsatisfied or unverifiable)
+    exact = checked and not unsatisfied and not unverifiable
     return {
-        "match_level": "partial",
+        "match_level": "full" if exact else "partial",
         "satisfied": list(dict.fromkeys(satisfied + ([f"metadata overlap: {term}" for term in matched[:3]]))),
         "unsatisfied": list(dict.fromkeys(unsatisfied)),
         "unverifiable": list(dict.fromkeys(unverifiable)),
         "confidence": min(70, 35 + 8 * len(matched) + 5 * len(satisfied)),
         "match_reason": reason,
-        "verification_fallback": False,
+        "verification_fallback": bool(candidate.get("fallback_only") or understanding.get("required_terms") and any(
+            term not in movie_terms for term in understanding["required_terms"]
+        )),
     }
 
 
