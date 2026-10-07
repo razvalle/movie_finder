@@ -156,14 +156,14 @@
     filter.addEventListener("change", () => form.requestSubmit(button));
   });
 
-  const genreSelect = form.querySelector("#genre-add-select");
-  const addGenreButton = form.querySelector("[data-add-genre]");
   const genreChips = form.querySelector("[data-genre-chips]");
+  const genreMenu = form.querySelector("[data-genre-menu]");
 
-  function addGenreChip(value) {
-    if (!genreSelect || !genreChips || !value) return;
-    const option = [...genreSelect.options].find((item) => item.value === value);
-    if (!option || option.disabled || form.querySelector(`[data-selected-genre="${CSS.escape(value)}"]`)) return;
+  function addGenreChip(addButton) {
+    const value = addButton.dataset.addGenre;
+    const option = addButton.closest("[data-genre-option]");
+    const labelText = option?.querySelector(".genre-picker__name")?.textContent.trim();
+    if (!genreChips || !value || !labelText || addButton.disabled || form.querySelector(`[data-selected-genre="${CSS.escape(value)}"]`)) return;
 
     const chip = document.createElement("span");
     chip.className = "active-filter-chip";
@@ -177,42 +177,40 @@
     const label = document.createElement("span");
     label.className = "active-filter-chip__label";
     label.dataset.i18nGenre = value;
-    label.textContent = option.textContent;
+    label.textContent = labelText;
 
     const removeButton = document.createElement("button");
     removeButton.className = "active-filter-chip__remove";
     removeButton.type = "button";
     removeButton.dataset.removeGenre = value;
-    removeButton.setAttribute("aria-label", `Remove ${option.textContent} genre`);
-    removeButton.title = `Remove ${option.textContent}`;
+    removeButton.setAttribute("aria-label", `Remove ${labelText} genre`);
+    removeButton.title = `Remove ${labelText}`;
     removeButton.textContent = "×";
+    removeButton.addEventListener("click", () => removeGenreChip(removeButton));
 
     chip.append(hiddenInput, label, removeButton);
     genreChips.append(chip);
-    option.disabled = true;
-    genreSelect.value = "";
-    addGenreButton.disabled = true;
+    addButton.disabled = true;
     window.dispatchEvent(new Event("movie-finder:content-updated"));
+    form.requestSubmit(button);
   }
 
-  function removeGenreChip(button) {
-    const chip = button.closest("[data-selected-genre]");
+  function removeGenreChip(removeButton) {
+    const chip = removeButton.closest("[data-selected-genre]");
     if (!chip) return;
     const value = chip.dataset.selectedGenre;
-    const option = [...(genreSelect?.options || [])].find((item) => item.value === value);
-    if (option) option.disabled = false;
+    const addButton = genreMenu?.querySelector(`[data-add-genre="${CSS.escape(value)}"]`);
+    if (addButton) addButton.disabled = false;
     chip.remove();
+    window.dispatchEvent(new Event("movie-finder:content-updated"));
+    form.requestSubmit(button);
   }
 
-  genreSelect?.addEventListener("change", () => {
-    if (addGenreButton) addGenreButton.disabled = !genreSelect.value;
+  genreMenu?.querySelectorAll("[data-add-genre]").forEach((addButton) => {
+    addButton.addEventListener("click", () => addGenreChip(addButton));
   });
-  addGenreButton?.addEventListener("click", () => {
-    addGenreChip(genreSelect?.value);
-  });
-  genreChips?.addEventListener("click", (event) => {
-    const removeButton = event.target.closest("[data-remove-genre]");
-    if (removeButton) removeGenreChip(removeButton);
+  genreChips?.querySelectorAll("[data-remove-genre]").forEach((removeButton) => {
+    removeButton.addEventListener("click", () => removeGenreChip(removeButton));
   });
 
   form.querySelectorAll("[data-pagination-form]").forEach((paginationForm) => {

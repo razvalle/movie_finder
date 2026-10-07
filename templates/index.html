@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Movie Finder — by Mood &amp; Description</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='genre-menu-5') }}" />
 </head>
 <body>
 
@@ -66,22 +66,27 @@
                   </span>
                 {% endfor %}
               </div>
-              <div class="genre-add-control">
-                <label class="sr-only" for="genre-add-select">Add a genre</label>
-                <select id="genre-add-select" class="genre-filter" aria-label="Choose a genre">
-                  <option value="">Choose a genre</option>
-                  {% for genre in genres %}
-                    <option value="{{ genre }}" {% if genre in selected_genres %}disabled{% endif %} data-i18n-genre="{{ genre }}">{{ genre|title }}</option>
-                  {% endfor %}
-                </select>
-                <button class="genre-add-button" type="button" data-add-genre aria-label="Add selected genre" title="Add genre" disabled>+</button>
-              </div>
             </div>
           </div>
           <button class="search__button" type="submit" data-i18n="findButton">Find Movies</button>
           <div id="search-suggestions" class="search-suggestions" role="listbox" hidden></div>
         </div>
         <div class="filter-row">
+          <label id="genre-picker-label" data-i18n="genreLabel">Genre</label>
+          <details class="genre-picker" data-genre-menu>
+            <summary class="genre-picker__trigger" aria-labelledby="genre-picker-label">
+              <span data-i18n="allGenres">All genres</span>
+              <span class="genre-picker__chevron" aria-hidden="true">▾</span>
+            </summary>
+            <div class="genre-picker__menu" role="group" aria-label="Add genres">
+              {% for genre in genres %}
+                <div class="genre-picker__option" data-genre-option>
+                  <span class="genre-picker__name" data-i18n-genre="{{ genre }}">{{ genre|title }}</span>
+                  <button class="genre-picker__add" type="button" data-add-genre="{{ genre }}" aria-label="Add {{ genre|title }} genre" title="Add {{ genre|title }}" {% if genre in selected_genres %}disabled{% endif %}>+</button>
+                </div>
+              {% endfor %}
+            </div>
+          </details>
           <label for="awards" data-i18n="recognitionLabel">Recognition</label>
           <select id="awards" name="awards" class="genre-filter">
             <option value="" {% if not award_filter %}selected{% endif %} data-i18n="allFilms">All films</option>
@@ -324,7 +329,7 @@
     <p>MOVIE_FINDER_GROUP4</p>
   </footer>
 
-  <script src="{{ url_for('static', filename='js/smart-search.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/smart-search.js', v='genre-menu-4') }}" defer></script>
   <script src="{{ url_for('static', filename='js/poster-fallback.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/ui-preferences.js') }}" defer></script>
 </body>
