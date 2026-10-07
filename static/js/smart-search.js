@@ -156,8 +156,27 @@
     status.textContent = "";
   });
 
-  form.querySelectorAll(".filter-row select").forEach((filter) => {
+  form.querySelectorAll(".filter-row select[name]").forEach((filter) => {
     filter.addEventListener("change", () => form.requestSubmit(button));
+  });
+
+  const genreSelect = form.querySelector("#genre-add-select");
+  const addGenreButton = form.querySelector("[data-add-genre]");
+  genreSelect?.addEventListener("change", () => {
+    if (addGenreButton) addGenreButton.disabled = !genreSelect.value;
+  });
+  addGenreButton?.addEventListener("click", () => {
+    if (!genreSelect?.value) return;
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
+    const selectedGenres = [...form.querySelectorAll("[data-selected-genre]")]
+      .map((chip) => chip.dataset.selectedGenre);
+    if (!selectedGenres.includes(genreSelect.value)) selectedGenres.push(genreSelect.value);
+    params.delete("genre");
+    selectedGenres.forEach((genre) => params.append("genre", genre));
+    params.delete("remove_genre");
+    params.set("page", "1");
+    window.location.assign(url);
   });
 
   form.querySelectorAll("[data-pagination-form]").forEach((paginationForm) => {

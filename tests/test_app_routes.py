@@ -46,7 +46,7 @@ class SearchRouteTests(unittest.TestCase):
             "/?q=recommend+the+grand+budapest+hotel&genre=action&nationality=CA&per_page=12"
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'value="action" selected', response.data)
+        self.assertIn(b'data-selected-genre="action"', response.data)
         self.assertNotIn(b"The Grand Budapest Hotel", response.data)
 
     def test_country_overrides_stale_origin(self):
@@ -59,7 +59,7 @@ class SearchRouteTests(unittest.TestCase):
         response = self.client.get("/?q=japanese+horror+movies&genre=action&per_page=12")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"The selected genre filter overrides", response.data)
-        self.assertIn(b'value="action" selected', response.data)
+        self.assertIn(b'data-selected-genre="action"', response.data)
 
     def test_country_genre_and_human_input_routes(self):
         cases = [
@@ -159,6 +159,21 @@ class SearchRouteTests(unittest.TestCase):
         self.assertNotIn('filter-add-button', html)
         self.assertNotIn('active-filter-chips', html)
         self.assertIn('id="theme-toggle"', html)
+
+    def test_selected_genres_render_as_removable_chips(self):
+        response = self.client.get("/?genre=comedy&genre=drama")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('id="genre-add-select"', html)
+        self.assertIn('data-add-genre', html)
+        self.assertIn('data-selected-genre="comedy"', html)
+        self.assertIn('data-selected-genre="drama"', html)
+        self.assertIn('type="hidden" name="genre" value="comedy"', html)
+        self.assertIn('type="hidden" name="genre" value="drama"', html)
+        self.assertIn('aria-label="Remove Comedy genre"', html)
+        self.assertIn('aria-label="Remove Drama genre"', html)
+        self.assertRegex(html, r'<a class="active-filter-chip__remove" href="[^"]*genre=drama[^"]*"')
+        self.assertRegex(html, r'<a class="active-filter-chip__remove" href="[^"]*genre=comedy[^"]*"')
 
     def test_age_rating_never_filters_and_only_appears_per_movie(self):
         movies = [
