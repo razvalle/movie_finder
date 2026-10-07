@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Movie Finder — by Mood &amp; Description</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='genre-menu-5') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='dropdown-triangle-1') }}" />
 </head>
 <body>
 
@@ -22,17 +22,19 @@
           <span class="theme-toggle__icon" aria-hidden="true">☾</span>
         </button>
         <label class="sr-only" for="ui-language" data-i18n="interfaceLanguage">Interface language</label>
-        <select id="ui-language" class="genre-filter" aria-label="Interface language">
-          <option value="en" lang="en" selected>English</option>
-          <option value="es" lang="es">Español</option>
-          <option value="tl" lang="tl">Tagalog</option>
-          <option value="fr" lang="fr">Français</option>
-          <option value="de" lang="de">Deutsch</option>
-          <option value="pt" lang="pt">Português</option>
-          <option value="ja" lang="ja">日本語</option>
-          <option value="ko" lang="ko">한국어</option>
-          <option value="zh" lang="zh">中文</option>
-        </select>
+        <span class="dropdown-control dropdown-control--header">
+          <select id="ui-language" class="genre-filter" aria-label="Interface language">
+            <option value="en" lang="en" selected>English</option>
+            <option value="es" lang="es">Español</option>
+            <option value="tl" lang="tl">Tagalog</option>
+            <option value="fr" lang="fr">Français</option>
+            <option value="de" lang="de">Deutsch</option>
+            <option value="pt" lang="pt">Português</option>
+            <option value="ja" lang="ja">日本語</option>
+            <option value="ko" lang="ko">한국어</option>
+            <option value="zh" lang="zh">中文</option>
+          </select>
+        </span>
       </div>
     </div>
   </header>
@@ -76,7 +78,7 @@
           <details class="genre-picker" data-genre-menu>
             <summary class="genre-picker__trigger" aria-labelledby="genre-picker-label">
               <span data-i18n="allGenres">All genres</span>
-              <span class="genre-picker__chevron" aria-hidden="true">▾</span>
+              <span class="genre-picker__chevron" aria-hidden="true"></span>
             </summary>
             <div class="genre-picker__menu" role="group" aria-label="Add genres">
               {% for genre in genres %}
@@ -88,16 +90,20 @@
             </div>
           </details>
           <label for="awards" data-i18n="recognitionLabel">Recognition</label>
-          <select id="awards" name="awards" class="genre-filter">
-            <option value="" {% if not award_filter %}selected{% endif %} data-i18n="allFilms">All films</option>
-            <option value="winners" {% if award_filter %}selected{% endif %} data-i18n="awardWinners">Major award winners</option>
-          </select>
+          <span class="dropdown-control">
+            <select id="awards" name="awards" class="genre-filter">
+              <option value="" {% if not award_filter %}selected{% endif %} data-i18n="allFilms">All films</option>
+              <option value="winners" {% if award_filter %}selected{% endif %} data-i18n="awardWinners">Major award winners</option>
+            </select>
+          </span>
           <label for="per_page" data-i18n="perPageLabel">Per page</label>
-          <select id="per_page" name="per_page" class="genre-filter">
-            {% for option in per_page_options %}
-              <option value="{{ option }}" {% if per_page == option %}selected{% endif %}>{{ option }}</option>
-            {% endfor %}
-          </select>
+          <span class="dropdown-control">
+            <select id="per_page" name="per_page" class="genre-filter">
+              {% for option in per_page_options %}
+                <option value="{{ option }}" {% if per_page == option %}selected{% endif %}>{{ option }}</option>
+              {% endfor %}
+            </select>
+          </span>
         </div>
       </form>
       {% for conflict in filter_conflicts %}
