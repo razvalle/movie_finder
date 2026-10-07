@@ -635,7 +635,9 @@ body { background: var(--ink-950); color: var(--paper-100); }
 .pagination--top { margin-top: 0; }
 .pagination a { color: var(--gold-500); }
 .page-jump { display: flex; align-items: center; gap: 0.35rem; color: var(--paper-200); font-size: 0.85rem; }
-.page-jump__input { width: 2.8rem; min-height: 38px; padding: 0.2rem; border: 1.5px solid var(--ink-600); border-radius: 4px; background: var(--ink-900); color: var(--paper-100); font: inherit; text-align: center; }
+.page-jump__input { width: 2.8rem; min-height: 38px; padding: 0.2rem; border: 1.5px solid var(--ink-600); border-radius: 4px; background: var(--ink-900); color: var(--paper-100); font: inherit; font-variant-numeric: tabular-nums; text-align: center; appearance: textfield; -moz-appearance: textfield; }
+.page-jump__input::-webkit-inner-spin-button,
+.page-jump__input::-webkit-outer-spin-button { margin: 0; appearance: none; }
 .movie-card__score { background: var(--ink-800); }
 .movie-card__title { color: var(--paper-100); }
 .movie-card__meta, .movie-card__synopsis, .results__count { color: var(--paper-200); }
