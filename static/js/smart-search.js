@@ -213,15 +213,19 @@
     removeButton.addEventListener("click", () => removeGenreChip(removeButton));
   });
 
-  form.querySelectorAll("[data-pagination-form]").forEach((paginationForm) => {
-    paginationForm.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const pageInput = paginationForm.querySelector("input[name='page']");
+  document.querySelectorAll("[data-pagination-form]").forEach((paginationForm) => {
+    const pageInput = paginationForm.querySelector("input[name='page']");
+    const navigateToPage = () => {
       const totalPages = Number(pageInput.max);
       const page = Math.min(Math.max(Number.parseInt(pageInput.value, 10) || 1, 1), totalPages);
       pageInput.value = page;
       paginationForm.submit();
+    };
+    paginationForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      navigateToPage();
     });
+    pageInput.addEventListener("change", navigateToPage);
   });
 
   document.addEventListener("click", (event) => {

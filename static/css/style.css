@@ -124,6 +124,7 @@ body {
 }
 
 .search__row {
+  position: relative;
   display: flex;
   gap: 0.7rem;
   align-items: flex-start;
@@ -635,7 +636,6 @@ body { background: var(--ink-950); color: var(--paper-100); }
 .pagination a { color: var(--gold-500); }
 .page-jump { display: flex; align-items: center; gap: 0.35rem; color: var(--paper-200); font-size: 0.85rem; }
 .page-jump__input { width: 2.8rem; min-height: 38px; padding: 0.2rem; border: 1.5px solid var(--ink-600); border-radius: 4px; background: var(--ink-900); color: var(--paper-100); font: inherit; text-align: center; }
-.page-jump button { min-height: 38px; padding: 0.3rem 0.65rem; border: 1.5px solid var(--ink-600); border-radius: 4px; background: var(--ink-800); color: var(--paper-100); font: inherit; cursor: pointer; }
 .movie-card__score { background: var(--ink-800); }
 .movie-card__title { color: var(--paper-100); }
 .movie-card__meta, .movie-card__synopsis, .results__count { color: var(--paper-200); }
@@ -793,7 +793,7 @@ body { background: var(--ink-950); color: var(--paper-100); }
 .page-jump { flex-wrap: nowrap; }
 .page-jump__input { flex: 0 0 2.8rem; }
 .page-jump span { white-space: nowrap; }
-.search-suggestions { position: absolute; z-index: 20; width: min(100%, 620px); max-height: 240px; overflow-y: auto; border: 1.5px solid var(--gold-500); border-radius: 4px; background: var(--ink-900); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28); }
+.search-suggestions { position: absolute; top: calc(100% + 0.35rem); left: 0; z-index: 20; width: min(100%, 620px); max-height: 240px; overflow-y: auto; border: 1.5px solid var(--gold-500); border-radius: 4px; background: var(--ink-900); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28); }
 .search-suggestion { width: 100%; display: flex; justify-content: space-between; gap: 1rem; padding: 0.7rem 0.85rem; border: 0; border-bottom: 1px solid var(--ink-700); background: transparent; color: var(--paper-100); text-align: left; font: inherit; cursor: pointer; }
 .search-suggestion:last-child { border-bottom: 0; }
 .search-suggestion:hover, .search-suggestion:focus-visible { background: var(--ink-800); }
@@ -919,7 +919,7 @@ a:focus-visible {
   .search__entry { width: 100%; }
   .search__input { width: 100%; min-width: 0; min-height: 96px; }
   .search__button { width: 100%; min-height: 48px; height: auto; white-space: normal; }
-  .search-suggestions { position: fixed; top: 150px; left: 0.75rem; right: 0.75rem; width: auto; }
+  .search-suggestions { position: absolute; top: calc(100% + 0.35rem); left: 0; right: 0; width: 100%; }
   .filter-row {
     display: grid;
     grid-template-columns: max-content minmax(0, 1fr);

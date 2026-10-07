@@ -198,7 +198,6 @@
               <label for="page-top">Page</label>
               <input id="page-top" class="page-jump__input" name="page" type="number" min="1" max="{{ total_pages }}" value="{{ page_number }}" inputmode="numeric" aria-label="Jump to page" />
               <span>of {{ total_pages }}</span>
-              <button type="submit">Go</button>
             </form>
             {% if page_number < total_pages %}
               <a href="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="nextPage">Next</a>
@@ -320,7 +319,6 @@
               <label for="page-bottom">Page</label>
               <input id="page-bottom" class="page-jump__input" name="page" type="number" min="1" max="{{ total_pages }}" value="{{ page_number }}" inputmode="numeric" aria-label="Jump to page" />
               <span>of {{ total_pages }}</span>
-              <button type="submit">Go</button>
             </form>
             {% if page_number < total_pages %}
               <a href="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="nextPage">Next</a>
@@ -335,7 +333,7 @@
     <p>MOVIE_FINDER_GROUP4</p>
   </footer>
 
-  <script src="{{ url_for('static', filename='js/smart-search.js', v='genre-menu-4') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/smart-search.js', v='page-jump-2') }}" defer></script>
   <script src="{{ url_for('static', filename='js/poster-fallback.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/ui-preferences.js') }}" defer></script>
 </body>
