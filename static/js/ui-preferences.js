@@ -2,7 +2,6 @@
   const root = document.documentElement;
   const themeButton = document.querySelector("#theme-toggle");
   const themeIcon = themeButton?.querySelector(".theme-toggle__icon");
-  const languageSelect = document.querySelector("#ui-language");
   const translations = {
     en: {
       pageTitle: "Movie Finder — by Mood & Description", brand: "Movie Finder",
@@ -380,44 +379,17 @@
       themeButton.setAttribute("aria-label", themeLabel);
       themeButton.title = themeLabel;
     }
-    if (languageSelect) {
-      languageSelect.setAttribute("aria-label", dictionary.interfaceLanguage);
-    }
     window.movieFinderText = (key) => translate(key) ?? key;
   }
 
   const storedTheme = localStorage.getItem("movie-finder-theme");
   applyTheme(storedTheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
-  const languageInput = document.querySelector("#movie-language");
-  const searchForm = document.querySelector(".search__form");
-  const searchButton = searchForm?.querySelector(".search__button");
-  const url = new URL(window.location.href);
-  const storedLanguage = localStorage.getItem("movie-finder-language");
-  let selectedLanguage = url.searchParams.has("language") ? url.searchParams.get("language") : (storedLanguage || "");
-  if (languageSelect && !Array.from(languageSelect.options).some((option) => option.value === selectedLanguage)) {
-    selectedLanguage = "";
-  }
-  if (languageSelect) languageSelect.value = selectedLanguage;
-  if (languageInput) languageInput.value = selectedLanguage;
-  applyLanguage(selectedLanguage || "en");
-
-  if (!url.searchParams.has("language") && storedLanguage && storedLanguage === selectedLanguage && languageInput && searchForm) {
-    languageInput.value = storedLanguage;
-    searchForm.requestSubmit(searchButton || undefined);
-  }
+  applyLanguage("en");
 
   themeButton?.addEventListener("click", () => {
     const nextTheme = root.dataset.theme === "dark" ? "light" : "dark";
     applyTheme(nextTheme);
     localStorage.setItem("movie-finder-theme", nextTheme);
   });
-
-  languageSelect?.addEventListener("change", () => {
-    const selection = languageSelect.value;
-    if (languageInput) languageInput.value = selection;
-    localStorage.setItem("movie-finder-language", selection);
-    applyLanguage(selection || "en");
-    if (searchForm) searchForm.requestSubmit(searchButton || undefined);
-  });
-  window.addEventListener("movie-finder:content-updated", () => applyLanguage(languageSelect?.value || "en"));
+  window.addEventListener("movie-finder:content-updated", () => applyLanguage("en"));
 })();

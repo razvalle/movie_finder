@@ -25,9 +25,10 @@ import json
 from pathlib import Path
 import pycountry
 
-from flask import Flask, redirect, render_template, request, url_for
+from flask import Flask, jsonify, redirect, render_template, request, url_for
 
 from data.movies import MOVIES
+from data.synonyms import GENRE_SYNONYMS, MOOD_SYNONYMS, THEME_SYNONYMS
 from feedback_store import FEEDBACK_DB_PATH, record_feedback
 from poster_storage import poster_public_base_url, poster_public_url
 from nlp.extract import extract_preferences
@@ -76,11 +77,6 @@ DEFAULT_ALTERNATIVE_QUERIES = [
     "highly rated science fiction movies",
     "mystery movies with an investigation",
 ]
-COMMON_LANGUAGE_LABELS = {
-    "ar": "Arabic", "de": "German", "en": "English", "es": "Spanish",
-    "fr": "French", "hi": "Hindi", "it": "Italian", "ja": "Japanese",
-    "ko": "Korean", "pt": "Portuguese", "ru": "Russian", "zh": "Chinese",
-}
 
 NATIONALITY_ALIASES = {
     "american": "US", "british": "GB", "english": "GB", "indian": "IN",
@@ -192,6 +188,27 @@ def movie_rank_key(movie):
     return (movie.get("vote_count", 0), movie.get("average_rating") or 0, movie.get("release_year", 0))
 
 
+# key -> (label, case-folded award text to look for; empty means any recorded award)
+RECOGNITION_OPTIONS = {
+    "winners": ("Major award winners", ""),
+    "academy": ("Academy Award", "academy award"),
+    "palme": ("Palme d'Or", "palme d'or"),
+    "golden-bear": ("Golden Bear", "golden bear"),
+    "golden-lion": ("Golden Lion", "golden lion"),
+}
+
+
+def movie_matches_recognition(movie, selected_keys):
+    """True when the movie has a curated award matching any selected recognition option."""
+    awards = [str(award).casefold() for award in movie.get("notable_awards") or []]
+    if not awards:
+        return False
+    return any(
+        not RECOGNITION_OPTIONS[key][1] or any(RECOGNITION_OPTIONS[key][1] in award for award in awards)
+        for key in selected_keys
+    )
+
+
 def ranking_key(entry, ranking_intent):
     movie = entry["movie"]
     rating = movie.get("average_rating") or 0
@@ -272,18 +289,6 @@ def build_debug_view(query_analysis, preferences, filtered_count, result_count):
 def movie_country_codes(movie):
     """Use TMDB production countries when enriched, otherwise IMDb listing regions."""
     return movie.get("production_countries") or movie.get("origin_regions", [movie.get("nationality")])
-
-
-def language_options(movies):
-    codes = {str(movie.get("original_language") or "").strip().lower() for movie in movies}
-    codes.discard("")
-    if not codes:
-        codes = set(COMMON_LANGUAGE_LABELS)
-    options = []
-    for code in sorted(codes):
-        language = pycountry.languages.get(alpha_2=code) or pycountry.languages.get(alpha_3=code)
-        options.append((code, COMMON_LANGUAGE_LABELS.get(code, getattr(language, "name", code.upper()))))
-    return options
 
 
 def movie_matches_release_year(movie, constraint):
@@ -494,10 +499,24 @@ def index():
     if query and not allow_search(request.remote_addr or "unknown"):
         return "Search limit reached. Please wait a minute and try again.", 429
     debug_enabled = request.args.get("debug", "").strip().lower() in {"1", "true", "yes"}
-    selected_genre = request.args.get("genre", "").strip().lower()
-    selected_language = request.args.get("language", "").strip().lower()
+    selected_genres = list(dict.fromkeys(
+        value.strip().lower() for value in request.args.getlist("genre") if value.strip()
+    ))
+    selected_genres = [
+        genre for genre in selected_genres
+        if genre not in request.args.getlist("remove_genre")
+    ]
+    selected_genre = selected_genres[0] if selected_genres else ""
     selected_nationality = request.args.get("nationality", "").strip().upper()
-    award_filter = request.args.get("awards", "").strip().lower() == "winners"
+    selected_awards = list(dict.fromkeys(
+        value.strip().lower() for value in request.args.getlist("awards")
+        if value.strip().lower() in RECOGNITION_OPTIONS
+    ))
+    selected_awards = [
+        award for award in selected_awards
+        if award not in request.args.getlist("remove_awards")
+    ]
+    award_filter = bool(selected_awards)
     initial_query = build_structured_query(query) if query else None
     detected_nationality = initial_query["country"] if initial_query else ""
     filter_conflicts = []
@@ -510,7 +529,7 @@ def index():
     query_analysis = build_structured_query(query, preference_query) if query else None
     query_preferences = query_analysis["preferences"] if query_analysis else None
     if query_preferences and query_preferences["genres"]:
-        if selected_genre and selected_genre not in query_preferences["genres"]:
+        if selected_genres and not any(genre in query_preferences["genres"] for genre in selected_genres):
             filter_conflicts.append("The selected genre filter overrides the genre in your search.")
     specific_title_matches = [
         movie for movie in query_title_matches
@@ -537,9 +556,6 @@ def index():
     except ValueError:
         page_number = 1
     genres = sorted({genre for movie in MOVIES for genre in movie["genres"]})
-    movie_languages = language_options(MOVIES)
-    available_languages = {str(movie.get("original_language") or "").strip().lower() for movie in MOVIES}
-    available_languages.discard("")
     nationalities = sorted({
         code for movie in MOVIES for code in movie_country_codes(movie) if code
     })
@@ -547,7 +563,7 @@ def index():
     llm_min_rating = understanding["min_rating"] if understanding else None
     query_genres = [] if selected_genre else (list(query_preferences["genres"]) if query_preferences else [])
     if selected_genre and query_preferences:
-        query_preferences["genres"] = [selected_genre]
+        query_preferences["genres"] = list(selected_genres)
     if query_preferences and understanding:
         if not query_genres and not selected_genre:
             query_genres = [genre for genre in understanding["genres"] if genre in genres]
@@ -573,10 +589,9 @@ def index():
 
     def matching_base_filters(movie):
         return (
-            (not selected_genre or selected_genre in movie["genres"])
-            and (not selected_language or not available_languages or str(movie.get("original_language") or "").strip().lower() == selected_language)
+            (not selected_genres or any(genre in movie["genres"] for genre in selected_genres))
             and (not effective_nationality or effective_nationality in movie_country_codes(movie))
-            and (not award_filter or movie.get("notable_awards"))
+            and (not selected_awards or movie_matches_recognition(movie, selected_awards))
         )
 
     base_movies = [movie for movie in MOVIES if matching_base_filters(movie)]
@@ -630,9 +645,9 @@ def index():
         "dropped": dropped,
         "feedback_saved": request.args.get("feedback") == "saved",
         "selected_genre": selected_genre,
-        "selected_language": selected_language,
-        "language_options": movie_languages,
-        "language_metadata_available": bool(available_languages),
+        "selected_genres": selected_genres,
+        "selected_awards": selected_awards,
+        "recognition_options": RECOGNITION_OPTIONS,
         "selected_nationality": effective_nationality,
         "award_filter": award_filter,
         "search_notice": search_notice,
@@ -664,18 +679,7 @@ def index():
     }
 
     if not query:
-        filter_metadata_missing = bool(
-            selected_language and not available_languages
-        )
-        context["assistant_state"] = "unmapped" if filter_metadata_missing else ""
-        if filter_metadata_missing:
-            context["alternative_queries"] = DEFAULT_ALTERNATIVE_QUERIES
-        context["assistant_message"] = build_assistant_message(
-            "",
-            len(filtered_movies),
-            selected_language=selected_language,
-            language_available=bool(available_languages),
-        )
+        context["assistant_message"] = build_assistant_message("", len(filtered_movies))
 
     if query:
         preferences = query_preferences
@@ -857,8 +861,6 @@ def index():
             query,
             len(all_results),
             exact_count=len(exact_results),
-            selected_language=selected_language,
-            language_available=bool(available_languages),
             genres=(understanding.get("genres") or query_preferences.get("genres", [])),
             understood_terms=understanding.get("keywords", []) or understanding.get("expanded_concepts", []),
             missing_requirements=missing_requirements,
@@ -901,6 +903,52 @@ def index():
         })
 
     return render_template("index.html", **context)
+
+
+SUGGESTION_TITLE_LIMIT = 50_000
+_SUGGESTION_INDEX = {}
+
+
+def suggestion_index():
+    """Lazily build title and vocabulary phrases from the app's own catalog and synonym tables."""
+    if not _SUGGESTION_INDEX:
+        top = heapq.nlargest(SUGGESTION_TITLE_LIMIT, MOVIES, key=movie_rank_key)
+        _SUGGESTION_INDEX["titles"] = [
+            (normalize_text(movie["title"]).replace(",", " ").strip(), movie["title"]) for movie in top if movie.get("title")
+        ]
+        phrases = [(f"{genre} movies", "genre") for genre in GENRE_SYNONYMS]
+        phrases += [(f"something {mood}", "mood") for mood in MOOD_SYNONYMS]
+        phrases += [(f"movies about {theme}", "theme") for theme in THEME_SYNONYMS]
+        _SUGGESTION_INDEX["phrases"] = phrases
+    return _SUGGESTION_INDEX
+
+
+@app.route("/suggest", methods=["GET"])
+def suggest():
+    typed = normalize_text(request.args.get("q", "")[:100]).replace(",", " ").strip()
+    if len(typed) < 2:
+        return jsonify([])
+    index = suggestion_index()
+
+    def rank(text):
+        if text.startswith(typed):
+            return 0
+        if any(word.startswith(typed) for word in text.split()) or f" {typed}" in text:
+            return 1
+        return None
+
+    suggestions = []
+    for phrase, kind in index["phrases"]:
+        if rank(phrase) is not None:
+            suggestions.append((rank(phrase), 0, phrase, kind))
+    seen = set()
+    for position, (normalized_title, title) in enumerate(index["titles"]):
+        level = rank(normalized_title)
+        if level is not None and title not in seen:
+            seen.add(title)
+            suggestions.append((level, position + 1, title, "title"))
+    suggestions.sort(key=lambda item: (item[0], item[1]))
+    return jsonify([{"text": text, "kind": kind} for _, _, text, kind in suggestions[:8]])
 
 
 @app.route("/feedback", methods=["POST"])

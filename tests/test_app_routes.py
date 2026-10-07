@@ -105,7 +105,7 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b"Academy Award", response.data)
         self.assertNotIn(b"Story 0009", response.data)
 
-    def test_genre_recognition_and_language_filters_combine_and_rating_is_card_metadata(self):
+    def test_genre_and_recognition_filters_combine_and_rating_is_card_metadata(self):
         movies = [
             {
                 "id": 999991, "title": "English Film", "synopsis": "English record.",
@@ -132,26 +132,24 @@ class SearchRouteTests(unittest.TestCase):
             },
         ]
         with patch("app.MOVIES", movies):
-            response = self.client.get("/?genre=drama&awards=winners&language=es&per_page=12")
+            response = self.client.get("/?genre=drama&awards=winners&per_page=12")
         self.assertEqual(response.status_code, 200)
+        self.assertIn(b"English Film", response.data)
         self.assertIn(b"Spanish Film", response.data)
-        self.assertNotIn(b"English Film", response.data)
         self.assertNotIn(b"Spanish Action Film", response.data)
-        self.assertIn(b'value="es" lang="es" selected', response.data)
         self.assertIn(b"Age rating", response.data)
         self.assertIn(b"<span class=\"movie-age-rating__value\">R</span>", response.data)
         self.assertIn(b"United Kingdom", response.data)
         self.assertIn(b"https://image.tmdb.org/t/p/w342/spanish.jpg", response.data)
 
-    def test_manual_show_movies_button_is_removed_and_controls_exist(self):
+    def test_english_only_ui_has_no_language_control_and_has_theme_toggle(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertNotIn(b"Show Movies", response.data)
-        self.assertIn(b'name="language"', response.data)
+        self.assertNotIn(b'name="language"', response.data)
         self.assertNotIn(b'name="age_rating"', response.data)
-        self.assertEqual(response.data.count(b'id="ui-language"'), 1)
+        self.assertNotIn(b'id="ui-language"', response.data)
         self.assertNotIn(b'id="language"', response.data)
-        self.assertIn(b'value="tl" lang="tl"', response.data)
         self.assertIn(b'id="theme-toggle"', response.data)
 
     def test_age_rating_never_filters_and_only_appears_per_movie(self):
@@ -296,12 +294,13 @@ class SearchRouteTests(unittest.TestCase):
         self.assertEqual(row[:4], ("mystery without horror", movie["id"], movie["title"], 0))
         self.assertTrue(row[4].endswith("+00:00"))
 
-    def test_unavailable_filter_offers_alternative_searches(self):
+    def test_language_query_is_ignored_in_english_only_interface(self):
         response = self.client.get("/?language=es")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"catalog doesn&#39;t include language details yet", response.data)
-        self.assertIn(b'class="search-alternatives"', response.data)
+        self.assertNotIn(b"catalog doesn&#39;t include language details yet", response.data)
+        self.assertNotIn(b'name="language"', response.data)
         self.assertNotIn(b"Missing or unverified", response.data)
+        self.assertIn(b"All Movies", response.data)
 
     def test_negated_query_does_not_match_on_generic_title_words(self):
         response = self.client.get("/?q=a+movie+where+there+is+no+woman&per_page=12")
