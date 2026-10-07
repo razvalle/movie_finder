@@ -43,32 +43,45 @@
       <form class="search__form" action="{{ url_for('index') }}" method="get">
         <label class="search__label" for="q" data-i18n="findLabel">Find a movie</label>
         <div class="search__row">
-          <textarea
-            id="q"
-            name="q"
-            class="search__input"
-            rows="2"
-            data-i18n-placeholder="searchPlaceholder"
-            placeholder="e.g. I want something suspenseful but not horror, preferably a mystery under two hours."
-            autocomplete="off"
-            aria-autocomplete="list"
-            aria-controls="search-suggestions"
-            aria-expanded="false"
-          >{{ query }}</textarea>
+          <div class="search__entry">
+            <textarea
+              id="q"
+              name="q"
+              class="search__input"
+              rows="2"
+              data-i18n-placeholder="searchPlaceholder"
+              placeholder="e.g. I want something suspenseful but not horror, preferably a mystery under two hours."
+              autocomplete="off"
+              aria-autocomplete="list"
+              aria-controls="search-suggestions"
+              aria-expanded="false"
+            >{{ query }}</textarea>
+            <div class="search__genre-controls">
+              <div class="search__genre-chips" data-genre-chips aria-label="Selected genres">
+                {% for genre in selected_genres %}
+                  <span class="active-filter-chip" data-selected-genre="{{ genre }}">
+                    <input type="hidden" name="genre" value="{{ genre }}" />
+                    <span class="active-filter-chip__label" data-i18n-genre="{{ genre }}">{{ genre|title }}</span>
+                    <button class="active-filter-chip__remove" type="button" data-remove-genre="{{ genre }}" aria-label="Remove {{ genre|title }} genre" title="Remove {{ genre|title }}">&times;</button>
+                  </span>
+                {% endfor %}
+              </div>
+              <div class="genre-add-control">
+                <label class="sr-only" for="genre-add-select">Add a genre</label>
+                <select id="genre-add-select" class="genre-filter" aria-label="Choose a genre">
+                  <option value="">Choose a genre</option>
+                  {% for genre in genres %}
+                    <option value="{{ genre }}" {% if genre in selected_genres %}disabled{% endif %} data-i18n-genre="{{ genre }}">{{ genre|title }}</option>
+                  {% endfor %}
+                </select>
+                <button class="genre-add-button" type="button" data-add-genre aria-label="Add selected genre" title="Add genre" disabled>+</button>
+              </div>
+            </div>
+          </div>
           <button class="search__button" type="submit" data-i18n="findButton">Find Movies</button>
           <div id="search-suggestions" class="search-suggestions" role="listbox" hidden></div>
         </div>
         <div class="filter-row">
-          <label for="genre-add-select" data-i18n="genreLabel">Genre</label>
-          <div class="genre-add-control">
-            <select id="genre-add-select" class="genre-filter" aria-label="Choose a genre">
-              <option value="">Choose a genre</option>
-              {% for genre in genres %}
-                <option value="{{ genre }}" {% if genre in selected_genres %}disabled{% endif %} data-i18n-genre="{{ genre }}">{{ genre|title }}</option>
-              {% endfor %}
-            </select>
-            <button class="genre-add-button" type="button" data-add-genre aria-label="Add selected genre" title="Add genre" disabled>+</button>
-          </div>
           <label for="awards" data-i18n="recognitionLabel">Recognition</label>
           <select id="awards" name="awards" class="genre-filter">
             <option value="" {% if not award_filter %}selected{% endif %} data-i18n="allFilms">All films</option>
@@ -81,19 +94,6 @@
             {% endfor %}
           </select>
         </div>
-        {% if selected_genres %}
-          {% for genre in selected_genres %}
-            <input type="hidden" name="genre" value="{{ genre }}" />
-          {% endfor %}
-          <div class="active-filter-chips" aria-label="Active genres">
-            {% for genre in selected_genres %}
-              <span class="active-filter-chip" data-selected-genre="{{ genre }}">
-                {{ genre|title }}
-                <a class="active-filter-chip__remove" href="{{ url_for('index', q=query, genre=selected_genres|reject('eq', genre)|list, awards=selected_awards, nationality=selected_nationality, per_page=per_page, page=1, debug='1' if debug_enabled else '', drop=dropped) }}" aria-label="Remove {{ genre|title }} genre" title="Remove {{ genre|title }}">&times;</a>
-              </span>
-            {% endfor %}
-          </div>
-        {% endif %}
       </form>
       {% for conflict in filter_conflicts %}
         <p class="filter-conflict" data-i18n="{{ 'genreFilterConflict' if 'genre' in conflict else 'countryFilterConflict' }}">{{ conflict }}</p>

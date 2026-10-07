@@ -65,10 +65,6 @@
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (!searchInput.value.trim()) {
-      window.location.assign(form.action);
-      return;
-    }
     const restoreLabel = button.textContent;
     window.clearTimeout(timer);
     activeController?.abort();
@@ -162,21 +158,61 @@
 
   const genreSelect = form.querySelector("#genre-add-select");
   const addGenreButton = form.querySelector("[data-add-genre]");
+  const genreChips = form.querySelector("[data-genre-chips]");
+
+  function addGenreChip(value) {
+    if (!genreSelect || !genreChips || !value) return;
+    const option = [...genreSelect.options].find((item) => item.value === value);
+    if (!option || option.disabled || form.querySelector(`[data-selected-genre="${CSS.escape(value)}"]`)) return;
+
+    const chip = document.createElement("span");
+    chip.className = "active-filter-chip";
+    chip.dataset.selectedGenre = value;
+
+    const hiddenInput = document.createElement("input");
+    hiddenInput.type = "hidden";
+    hiddenInput.name = "genre";
+    hiddenInput.value = value;
+
+    const label = document.createElement("span");
+    label.className = "active-filter-chip__label";
+    label.dataset.i18nGenre = value;
+    label.textContent = option.textContent;
+
+    const removeButton = document.createElement("button");
+    removeButton.className = "active-filter-chip__remove";
+    removeButton.type = "button";
+    removeButton.dataset.removeGenre = value;
+    removeButton.setAttribute("aria-label", `Remove ${option.textContent} genre`);
+    removeButton.title = `Remove ${option.textContent}`;
+    removeButton.textContent = "×";
+
+    chip.append(hiddenInput, label, removeButton);
+    genreChips.append(chip);
+    option.disabled = true;
+    genreSelect.value = "";
+    addGenreButton.disabled = true;
+    window.dispatchEvent(new Event("movie-finder:content-updated"));
+  }
+
+  function removeGenreChip(button) {
+    const chip = button.closest("[data-selected-genre]");
+    if (!chip) return;
+    const value = chip.dataset.selectedGenre;
+    const option = [...(genreSelect?.options || [])].find((item) => item.value === value);
+    if (option) option.disabled = false;
+    chip.remove();
+  }
+
   genreSelect?.addEventListener("change", () => {
     if (addGenreButton) addGenreButton.disabled = !genreSelect.value;
   });
   addGenreButton?.addEventListener("click", () => {
-    if (!genreSelect?.value) return;
-    const url = new URL(window.location.href);
-    const params = url.searchParams;
-    const selectedGenres = [...form.querySelectorAll("[data-selected-genre]")]
-      .map((chip) => chip.dataset.selectedGenre);
-    if (!selectedGenres.includes(genreSelect.value)) selectedGenres.push(genreSelect.value);
-    params.delete("genre");
-    selectedGenres.forEach((genre) => params.append("genre", genre));
-    params.delete("remove_genre");
-    params.set("page", "1");
-    window.location.assign(url);
+    addGenreChip(genreSelect?.value);
+  });
+  genreChips?.addEventListener("click", (event) => {
+    const removeButton = event.target.closest("[data-remove-genre]");
+    if (removeButton) removeGenreChip(removeButton);
   });
 
   form.querySelectorAll("[data-pagination-form]").forEach((paginationForm) => {

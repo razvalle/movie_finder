@@ -164,16 +164,18 @@ class SearchRouteTests(unittest.TestCase):
         response = self.client.get("/?genre=comedy&genre=drama")
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
+        self.assertIn('class="search__entry"', html)
+        self.assertIn('data-genre-chips', html)
         self.assertIn('id="genre-add-select"', html)
         self.assertIn('data-add-genre', html)
         self.assertIn('data-selected-genre="comedy"', html)
         self.assertIn('data-selected-genre="drama"', html)
         self.assertIn('type="hidden" name="genre" value="comedy"', html)
         self.assertIn('type="hidden" name="genre" value="drama"', html)
+        self.assertIn('data-remove-genre="comedy"', html)
+        self.assertIn('data-remove-genre="drama"', html)
         self.assertIn('aria-label="Remove Comedy genre"', html)
         self.assertIn('aria-label="Remove Drama genre"', html)
-        self.assertRegex(html, r'<a class="active-filter-chip__remove" href="[^"]*genre=drama[^"]*"')
-        self.assertRegex(html, r'<a class="active-filter-chip__remove" href="[^"]*genre=comedy[^"]*"')
 
     def test_age_rating_never_filters_and_only_appears_per_movie(self):
         movies = [
