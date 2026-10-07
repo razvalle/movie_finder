@@ -669,6 +669,7 @@ body { background: var(--ink-950); color: var(--paper-100); }
 .site-header__logo { width: 56px; height: 56px; flex: 0 0 56px; border-radius: 10px; }
 .site-header__inner h1, .site-header__inner p { max-width: none; margin-left: 0; margin-right: 0; }
 .site-header__tools { display: flex; align-items: center; gap: 0.55rem; }
+.site-header__home { display: block; flex: 0 0 auto; line-height: 0; }
 .theme-toggle {
   width: 40px;
   height: 40px;

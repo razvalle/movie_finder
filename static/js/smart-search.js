@@ -230,6 +230,11 @@
 
   document.addEventListener("click", (event) => {
     if (suggestions && !suggestions.contains(event.target) && event.target !== searchInput) closeSuggestions();
+    if (genreMenu?.open && !genreMenu.contains(event.target)) genreMenu.open = false;
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && genreMenu?.open) genreMenu.open = false;
   });
 
   window.addEventListener("popstate", () => window.location.reload());

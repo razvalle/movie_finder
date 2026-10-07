@@ -11,7 +11,9 @@
   <header class="site-header">
     <div class="site-header__inner">
       <div class="site-header__brand">
-        <img class="site-header__logo" src="{{ url_for('static', filename='images/movie-finder-logo.svg') }}" alt="Movie Finder logo" width="56" height="56" />
+        <a class="site-header__home" href="{{ url_for('index') }}" aria-label="Movie Finder home">
+          <img class="site-header__logo" src="{{ url_for('static', filename='images/movie-finder-logo.svg') }}" alt="Movie Finder logo" width="56" height="56" />
+        </a>
         <div>
           <h1 data-i18n="brand">Movie Finder</h1>
           <p data-i18n="headerSubtitle">Search by description or browse movies by genre.</p>
@@ -333,7 +335,7 @@
     <p>MOVIE_FINDER_GROUP4</p>
   </footer>
 
-  <script src="{{ url_for('static', filename='js/smart-search.js', v='page-jump-2') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/smart-search.js', v='home-close-1') }}" defer></script>
   <script src="{{ url_for('static', filename='js/poster-fallback.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/ui-preferences.js') }}" defer></script>
 </body>

@@ -146,6 +146,7 @@ class SearchRouteTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
+        self.assertIn('<a class="site-header__home" href="/" aria-label="Movie Finder home">', html)
         self.assertIn('id="ui-language"', html)
         self.assertIn('<option value="en" lang="en" selected>English</option>', html)
         self.assertIn('<option value="es" lang="es">Español</option>', html)
