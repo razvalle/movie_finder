@@ -2,6 +2,7 @@
   const root = document.documentElement;
   const themeButton = document.querySelector("#theme-toggle");
   const themeIcon = themeButton?.querySelector(".theme-toggle__icon");
+  const languageSelect = document.querySelector("#ui-language");
   const translations = {
     en: {
       pageTitle: "Movie Finder — by Mood & Description", brand: "Movie Finder",
@@ -384,12 +385,22 @@
 
   const storedTheme = localStorage.getItem("movie-finder-theme");
   applyTheme(storedTheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
-  applyLanguage("en");
+  const storedLanguage = localStorage.getItem("movie-finder-language");
+  const selectedLanguage = ["en", "es", "tl", "fr", "de", "pt", "ja", "ko", "zh"].includes(storedLanguage)
+    ? storedLanguage
+    : "en";
+  if (languageSelect) languageSelect.value = selectedLanguage;
+  applyLanguage(selectedLanguage);
 
   themeButton?.addEventListener("click", () => {
     const nextTheme = root.dataset.theme === "dark" ? "light" : "dark";
     applyTheme(nextTheme);
     localStorage.setItem("movie-finder-theme", nextTheme);
+  });
+  languageSelect?.addEventListener("change", () => {
+    const selection = languageSelect.value;
+    localStorage.setItem("movie-finder-language", selection);
+    applyLanguage(selection);
   });
   window.addEventListener("movie-finder:content-updated", () => applyLanguage("en"));
 })();

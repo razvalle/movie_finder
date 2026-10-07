@@ -160,21 +160,6 @@
     filter.addEventListener("change", () => form.requestSubmit(button));
   });
 
-  form.querySelectorAll("[data-chip-kind]").forEach((addButton) => {
-    addButton.addEventListener("click", () => {
-      const kind = addButton.dataset.chipKind;
-      const selector = kind === "genre" ? "#genre-chip-select" : "#recognition-chip-select";
-      const value = form.querySelector(selector)?.value;
-      if (!value) return;
-      const url = new URL(window.location.href);
-      const params = new URLSearchParams(url.search);
-      const key = kind === "genre" ? "genre" : "awards";
-      params.append(key, value);
-      url.search = params.toString();
-      window.location.assign(url);
-    });
-  });
-
   form.querySelectorAll("[data-pagination-form]").forEach((paginationForm) => {
     paginationForm.addEventListener("submit", (event) => {
       event.preventDefault();

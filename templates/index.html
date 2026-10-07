@@ -21,6 +21,18 @@
         <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch theme">
           <span class="theme-toggle__icon" aria-hidden="true">☾</span>
         </button>
+        <label class="sr-only" for="ui-language" data-i18n="interfaceLanguage">Interface language</label>
+        <select id="ui-language" class="genre-filter" aria-label="Interface language">
+          <option value="en" lang="en" selected>English</option>
+          <option value="es" lang="es">Español</option>
+          <option value="tl" lang="tl">Tagalog</option>
+          <option value="fr" lang="fr">Français</option>
+          <option value="de" lang="de">Deutsch</option>
+          <option value="pt" lang="pt">Português</option>
+          <option value="ja" lang="ja">日本語</option>
+          <option value="ko" lang="ko">한국어</option>
+          <option value="zh" lang="zh">中文</option>
+        </select>
       </div>
     </div>
   </header>
@@ -54,47 +66,17 @@
               <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %} data-i18n-genre="{{ genre }}">{{ genre|title }}</option>
             {% endfor %}
           </select>
-          <label for="genre-chip-select" class="filter-add-label">Add genre</label>
-          <select id="genre-chip-select" class="genre-filter filter-add-select">
-            <option value="">Choose a genre</option>
-            {% for genre in genres %}
-              <option value="{{ genre }}" {% if genre in selected_genres %}disabled{% endif %}>{{ genre|title }}</option>
-            {% endfor %}
-          </select>
-          <button class="filter-add-button" type="button" data-chip-kind="genre">Add</button>
           <label for="awards" data-i18n="recognitionLabel">Recognition</label>
           <select id="awards" name="awards" class="genre-filter">
             <option value="" {% if not award_filter %}selected{% endif %} data-i18n="allFilms">All films</option>
             <option value="winners" {% if award_filter %}selected{% endif %} data-i18n="awardWinners">Major award winners</option>
           </select>
-          <label for="recognition-chip-select" class="filter-add-label">Add recognition</label>
-          <select id="recognition-chip-select" class="genre-filter filter-add-select">
-            <option value="">Choose recognition</option>
-            {% for key, option in recognition_options.items() %}
-              <option value="{{ key }}" {% if key in selected_awards %}disabled{% endif %}>{{ option[0] }}</option>
-            {% endfor %}
-          </select>
-          <button class="filter-add-button" type="button" data-chip-kind="awards">Add</button>
           <label for="per_page" data-i18n="perPageLabel">Per page</label>
           <select id="per_page" name="per_page" class="genre-filter">
             {% for option in per_page_options %}
               <option value="{{ option }}" {% if per_page == option %}selected{% endif %}>{{ option }}</option>
             {% endfor %}
           </select>
-        </div>
-        <div class="active-filter-chips" aria-label="Active search filters">
-          {% for genre in selected_genres %}
-            <span class="active-filter-chip">
-              {{ genre|title }}
-              <a href="{{ url_for('index', q=query, genre=selected_genres|reject('eq', genre)|list, awards=selected_awards, per_page=per_page, page=1, drop=dropped) }}" aria-label="Remove {{ genre|title }} genre">&times;</a>
-            </span>
-          {% endfor %}
-          {% for award in selected_awards %}
-            <span class="active-filter-chip">
-              {{ recognition_options[award][0] }}
-              <a href="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards|reject('eq', award)|list, per_page=per_page, page=1, drop=dropped) }}" aria-label="Remove {{ recognition_options[award][0] }} recognition">&times;</a>
-            </span>
-          {% endfor %}
         </div>
       </form>
       {% for conflict in filter_conflicts %}

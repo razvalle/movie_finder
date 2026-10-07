@@ -142,15 +142,23 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b"United Kingdom", response.data)
         self.assertIn(b"https://image.tmdb.org/t/p/w342/spanish.jpg", response.data)
 
-    def test_english_only_ui_has_no_language_control_and_has_theme_toggle(self):
+    def test_ui_has_language_control_with_english_default_and_theme_toggle(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn(b"Show Movies", response.data)
-        self.assertNotIn(b'name="language"', response.data)
-        self.assertNotIn(b'name="age_rating"', response.data)
-        self.assertNotIn(b'id="ui-language"', response.data)
-        self.assertNotIn(b'id="language"', response.data)
-        self.assertIn(b'id="theme-toggle"', response.data)
+        html = response.get_data(as_text=True)
+        self.assertIn('id="ui-language"', html)
+        self.assertIn('<option value="en" lang="en" selected>English</option>', html)
+        self.assertIn('<option value="es" lang="es">Español</option>', html)
+        self.assertIn('<option value="tl" lang="tl">Tagalog</option>', html)
+        self.assertIn('<option value="fr" lang="fr">Français</option>', html)
+        self.assertIn('<option value="de" lang="de">Deutsch</option>', html)
+        self.assertIn('<option value="pt" lang="pt">Português</option>', html)
+        self.assertIn('<option value="ja" lang="ja">日本語</option>', html)
+        self.assertIn('<option value="ko" lang="ko">한국어</option>', html)
+        self.assertIn('<option value="zh" lang="zh">中文</option>', html)
+        self.assertNotIn('filter-add-button', html)
+        self.assertNotIn('active-filter-chips', html)
+        self.assertIn('id="theme-toggle"', html)
 
     def test_age_rating_never_filters_and_only_appears_per_movie(self):
         movies = [
