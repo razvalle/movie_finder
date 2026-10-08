@@ -39,5 +39,41 @@ def build_assistant_message(
         return message
     return acknowledgment + filter_note + (
         "I couldn't find a close fit for that wording. No close matches found in this catalog. "
-        "Try a genre, mood, actor, or short plot clue; the suggestions below are good starting points."
+        "Try refining your search with a genre, mood, actor, or short plot clue."
     )
+
+
+def build_alternative_queries(understanding, preferences=None):
+    """Return useful query variations based on this search's interpreted intent."""
+    understanding = understanding or {}
+    preferences = preferences or {}
+    proposed = understanding.get("alternative_queries") or []
+    if proposed:
+        return list(dict.fromkeys(
+            value.strip() for value in proposed
+            if isinstance(value, str) and value.strip()
+        ))[:3]
+
+    def values(*items):
+        return list(dict.fromkeys(
+            item.strip() for group in items for item in group
+            if isinstance(item, str) and item.strip()
+        ))
+
+    genres = values(preferences.get("genres", []), understanding.get("genres", []))
+    moods = values(preferences.get("moods", []), understanding.get("mood_tone", []))
+    themes = values(preferences.get("themes", []))
+    keywords = values(
+        preferences.get("free_text_keywords", []),
+        understanding.get("keywords", []),
+        understanding.get("expanded_concepts", []),
+    )
+    concepts = values(moods, themes, keywords)
+    queries = []
+
+    if concepts or genres:
+        description = " ".join(concepts + genres)
+        queries.append(f"{description} movies")
+    queries.extend(f"{genre} movies" for genre in genres)
+    queries.extend(f"{concept} movies" for concept in concepts)
+    return list(dict.fromkeys(queries))[:3]

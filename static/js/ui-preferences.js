@@ -18,7 +18,7 @@
       countExact: "{count} exact matches", countClosest: "{count} closest matches", countBrowse: "{count} matches",
       exactMatch: "Exact match", closestMatch: "Closest match", unverified: "Unverified",
       partialMessage: "I couldn't find an exact match, but here are some close options. Some details cannot be confirmed from this catalog.",
-      emptyMessage: "I couldn't find a close fit. Try a genre, mood, actor, or short plot clue; the suggestions below are a good starting point.",
+      emptyMessage: "I couldn't find a close fit. Try refining your search with a genre, mood, actor, or short plot clue.",
       exactMessage: "I found movies that fit what you asked for.", filterDataMessage: "This catalog doesn't include data for that language yet, so I can't filter by it. Showing all available movies instead.",
       emptyStateTitle: "No movies found.", emptyStateBody: "Try a different search or choose another genre.",
       themeLight: "Switch to light mode", themeDark: "Switch to dark mode", previousPage: "Previous", nextPage: "Next",
@@ -53,7 +53,7 @@
       countExact: "{count} coincidencias exactas", countClosest: "{count} opciones cercanas", countBrowse: "{count} películas",
       exactMatch: "Coincidencia exacta", closestMatch: "Opción cercana", unverified: "Sin verificar",
       partialMessage: "No encontré una coincidencia exacta, pero aquí tienes opciones cercanas. No se pueden confirmar algunos detalles con este catálogo.",
-      emptyMessage: "No encontré una opción cercana. Prueba con un género, estado de ánimo, actor o una pista breve de la trama; las sugerencias pueden ayudarte.",
+      emptyMessage: "No encontré una opción cercana. Prueba a ajustar la búsqueda con un género, estado de ánimo, actor o una pista breve de la trama.",
       exactMessage: "Encontré películas que coinciden con lo que pediste.", filterDataMessage: "Este catálogo aún no incluye datos de ese idioma, así que no puedo filtrar por él. Muestro todas las películas disponibles.",
       emptyStateTitle: "No se encontraron películas.", emptyStateBody: "Prueba otra búsqueda o elige un género distinto.",
       themeLight: "Cambiar a tema claro", themeDark: "Cambiar a tema oscuro", previousPage: "Anterior", nextPage: "Siguiente",
@@ -341,7 +341,8 @@
     const dictionary = translations[selected];
     const translate = (key) => dictionary[key] ?? extraTranslations[selected]?.[key] ?? translations.en[key] ?? extraTranslations.en[key];
     root.lang = selected;
-    document.title = dictionary.pageTitle;
+    const currentQuery = document.querySelector("#q")?.value.trim();
+    document.title = currentQuery ? `${dictionary.pageTitle} — ${currentQuery}` : dictionary.pageTitle;
     document.querySelectorAll("[data-i18n]").forEach((element) => {
       if (!textDefaults.has(element)) textDefaults.set(element, element.textContent);
       const key = element.dataset.i18n;

@@ -147,7 +147,7 @@ class SearchRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         self.assertNotIn('data-result-count=', html)
-        self.assertNotIn('404553', html)
+        self.assertIn(f'Showing 1-12 of {len(MOVIES)}', html)
         self.assertIn('All Movies', html)
 
     def test_ui_has_language_control_with_english_default_and_theme_toggle(self):

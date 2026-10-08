@@ -4,7 +4,8 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Movie Finder — by Mood &amp; Description</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='ui-upgrades-3') }}" />
+<link rel="icon" href="{{ url_for('static', filename='images/movie-finder-logo.svg') }}" type="image/svg+xml" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='ui-upgrades-5') }}" />
 </head>
 <body>
 
@@ -48,6 +49,7 @@
         <label class="search__label" for="q" data-i18n="findLabel">Find a movie</label>
         <div class="search__row">
           <div class="search__entry">
+            <div class="search__highlight-layer" aria-hidden="true" hidden></div>
             <textarea
               id="q"
               name="q"
@@ -82,7 +84,9 @@
             <div data-recent-items></div>
           </div>
         </div>
-        <div class="filter-row">
+        <details class="refine-panel">
+          <summary class="refine-panel__trigger">Refine <span aria-hidden="true">+</span></summary>
+          <div class="filter-row">
           <label id="genre-picker-label" data-i18n="genreLabel">Genre</label>
           <details class="genre-picker" data-genre-menu>
             <summary class="genre-picker__trigger" aria-labelledby="genre-picker-label">
@@ -117,7 +121,21 @@
             </select>
           </span>
           <button class="clear-filter" type="button" data-clear-filters data-i18n="clearAllFilters" {% if not selected_genres and not selected_awards %}hidden{% endif %}>Clear all filters</button>
-        </div>
+          <button class="refine-panel__close" type="button" data-close-refine>Done</button>
+          </div>
+          <details class="range-refinements">
+            <summary>More filters</summary>
+            <div class="range-refinements__grid">
+              <label for="runtime-range">Maximum runtime <output for="runtime-range">240 min</output></label>
+              <input id="runtime-range" type="range" min="60" max="240" step="5" value="240" aria-label="Maximum runtime in minutes" />
+              <label for="year-range">From release year <output for="year-range">1880</output></label>
+              <input id="year-range" type="range" min="1880" max="2026" step="1" value="1880" aria-label="Earliest release year" />
+              <label for="rating-range">Minimum IMDb rating <output for="rating-range">0.0</output></label>
+              <input id="rating-range" type="range" min="0" max="10" step="0.5" value="0" aria-label="Minimum IMDb rating" aria-describedby="rating-range-note" disabled />
+              <span class="range-unavailable" id="rating-range-note">Unavailable: the current local parser does not support minimum-rating filters.</span>
+            </div>
+          </details>
+        </details>
       </form>
       {% for conflict in filter_conflicts %}
         <p class="filter-conflict" data-i18n="{{ 'genreFilterConflict' if 'genre' in conflict else 'countryFilterConflict' }}">{{ conflict }}</p>
@@ -146,9 +164,10 @@
             {% endfor %}
           </p>
         {% endif %}
-        <div class="preferences__grid" aria-label="Understood criteria">
+        <div class="preferences__grid understood-strip" aria-label="Understood criteria">
           {% for tag in preference_tags %}
             <span class="pref-tag pref-tag--{{ tag.type }}">
+              {% if tag.type == 'include' %}<span class="pref-tag__sign" aria-hidden="true">+</span>{% elif tag.type == 'exclude' %}<span class="pref-tag__sign" aria-hidden="true">−</span>{% endif %}
               <span class="pref-tag__label">{{ tag.label }}</span>{{ tag.value }}
               {% if tag.remove_url %}<a class="pref-tag__remove" href="{{ tag.remove_url }}" aria-label="Remove {{ tag.label }} {{ tag.value }}" title="Remove">&times;</a>{% endif %}
             </span>
@@ -204,15 +223,29 @@
                 <option value="newest" data-i18n="sortNewest">Newest</option>
               </select>
             </span>
+            <div class="view-toggle" role="group" aria-label="Result layout">
+              <button type="button" data-view-mode="grid" aria-label="Grid view" aria-pressed="true" title="Grid view">▦</button>
+              <button type="button" data-view-mode="list" aria-label="List view" aria-pressed="false" title="List view">☷</button>
+            </div>
           </div>
         </div>
+        {% if result_count %}
+          {% set range_start = ((page_number - 1) * per_page) + 1 %}
+          {% set range_end = [page_number * per_page, result_count] | min %}
+          <p class="results__range" role="status" aria-live="polite">Showing {{ range_start }}-{{ range_end }} of {{ result_count }}</p>
+        {% endif %}
         {% if feedback_saved %}<p class="search-notice" role="status" data-i18n="feedbackSaved">Feedback saved. Thanks.</p>{% endif %}
 
         {% if total_pages > 1 and (searched or movies) %}
           <nav class="pagination pagination--top" aria-label="Movie pages" data-i18n-aria="paginationLabel">
-            {% if page_number > 1 %}
-              <a href="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="previousPage">Previous</a>
-            {% endif %}
+            <button type="button" class="pagination__button" data-page-url="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="previousPage" {% if page_number <= 1 %}disabled{% endif %}>Previous</button>
+            <div class="pagination__numbers">
+              {% for page_link in range(1, total_pages + 1) %}
+                {% if page_link == 1 or page_link == total_pages or page_number - 1 <= page_link <= page_number + 1 %}
+                  <a class="pagination__number" href="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_link, debug='1' if debug_enabled else '', drop=dropped) }}" {% if page_link == page_number %}aria-current="page"{% endif %}>{{ page_link }}</a>
+                {% elif page_link == 2 and page_number > 3 or page_link == total_pages - 1 and page_number < total_pages - 2 %}<span class="pagination__ellipsis" aria-hidden="true">…</span>{% endif %}
+              {% endfor %}
+            </div>
             <form class="page-jump" data-pagination-form method="get" action="{{ url_for('index') }}">
               <input type="hidden" name="q" value="{{ query }}" />
               {% for genre in selected_genres %}<input type="hidden" name="genre" value="{{ genre }}" />{% endfor %}
@@ -225,16 +258,14 @@
               <input id="page-top" class="page-jump__input" name="page" type="number" min="1" max="{{ total_pages }}" value="{{ page_number }}" inputmode="numeric" aria-label="Jump to page" />
               <span>of {{ total_pages }}</span>
             </form>
-            {% if page_number < total_pages %}
-              <a href="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="nextPage">Next</a>
-            {% endif %}
+            <button type="button" class="pagination__button" data-page-url="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="nextPage" {% if page_number >= total_pages %}disabled{% endif %}>Next</button>
           </nav>
         {% endif %}
 
         {% if searched and results %}
           <div class="results__list">
             {% for r in results %}
-              <article class="movie-card" data-sort-rank="{{ r.rank }}" data-sort-title="{{ r.movie.title }}" data-sort-rating="{{ r.movie.get('average_rating') or 0 }}" data-sort-votes="{{ r.movie.get('vote_count') or 0 }}" data-sort-year="{{ r.movie.get('release_year') or 0 }}">
+              <article class="movie-card" data-detail-title="{{ r.movie.title }}" data-detail-year="{{ r.movie.get('release_year') or '' }}" data-detail-synopsis="{{ r.movie.get('overview') or r.movie.get('synopsis') or '' }}" data-sort-rank="{{ r.rank }}" data-sort-title="{{ r.movie.title }}" data-sort-rating="{{ r.movie.get('average_rating') or 0 }}" data-sort-votes="{{ r.movie.get('vote_count') or 0 }}" data-sort-year="{{ r.movie.get('release_year') or 0 }}">
                 <div class="movie-card__poster">
                   {% if movie_poster_url(r.movie) %}
                     <img src="{{ movie_poster_url(r.movie) }}" alt="{{ r.movie.title }} poster" data-poster-title="{{ r.movie.title }}" data-poster-fallback="{{ url_for('static', filename='poster-placeholder.svg') }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
@@ -244,16 +275,19 @@
                     <img src="{{ url_for('static', filename='poster-placeholder.svg') }}" alt="{{ r.movie.title }} poster unavailable" data-poster-title="{{ r.movie.title }}" data-poster-fallback="{{ url_for('static', filename='poster-placeholder.svg') }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
                   {% endif %}
                 </div>
-                <div>
-                  <div class="movie-card__rank">#{{ r.rank }}</div>
+                <div class="movie-card__content">
+                  <div class="movie-card__head"><div class="movie-card__rank">#{{ r.rank }}</div><span class="movie-card__percent">{{ r.percent }}% match</span></div>
                   <div class="match-badges">
                     <span class="match-badge match-badge--{{ r.match_level }}" data-i18n="{{ 'exactMatch' if r.match_level == 'full' else 'closestMatch' }}">{{ r.match_badge }}</span>
                     {% if r.show_unverified_badge %}<span class="match-badge match-badge--unverified" data-i18n="unverified">Unverified</span>{% endif %}
                   </div>
-                  <h3 class="movie-card__title">{{ r.movie.title }}</h3>
+                  <div class="movie-card__title-row"><h3 class="movie-card__title">{{ r.movie.title }}</h3>{% if r.movie.get('release_year') %}<span class="movie-card__year">({{ r.movie.release_year }})</span>{% endif %}</div>
+                  <button type="button" class="movie-card__detail-trigger" data-open-detail>Movie details</button>
+                  <template class="movie-card__cast">{% for person in (r.movie.get('cast') or r.movie.get('actors') or [])[:8] %}<li>{{ person.get('name', '') if person is mapping else person }}</li>{% endfor %}</template>
+                  {% if r.movie.get('release_year') %}<div class="movie-card__meta sr-only">· {{ r.movie.release_year }}</div>{% endif %}
                   {% if r.movie.get('original_title') and r.movie.original_title != r.movie.title %}<div class="movie-card__meta"><span data-i18n="originalTitle">Original title</span>: <span lang="und">{{ r.movie.original_title }}</span></div>{% endif %}
-                  <div class="movie-card__meta">{{ r.genres_display }} · {{ r.movie.runtime }} min · {{ r.movie.release_year }}</div>
-                  <div class="movie-card__meta">{% if movie_origin_label(r.movie) %}<span data-i18n="originLabel">Origin</span>: {{ movie_origin_label(r.movie) }}{% else %}<span data-i18n="originUnavailable">Origin unavailable</span>{% endif %}</div>
+                  <div class="movie-card__genres" aria-label="Genres">{% for genre in r.movie.genres %}<span class="genre-pill" data-i18n-genre="{{ genre }}">{{ genre|title }}</span>{% endfor %}</div>
+                  <div class="movie-card__facts"><span><span aria-hidden="true">◷</span> {{ r.movie.runtime }} min</span><span><span aria-hidden="true">⌖</span> {% if movie_origin_label(r.movie) %}{{ movie_origin_label(r.movie) }}{% else %}<span data-i18n="originUnavailable">Origin unavailable</span>{% endif %}</span></div>
                   {% if r.movie.get('certification') %}<span class="movie-age-rating" data-i18n="contentRating">Age rating</span><span class="movie-age-rating__value">{{ r.movie.certification }}</span>{% endif %}
                   <p class="movie-card__match-reason">{{ r.match_reason }}</p>
                   {% if r.show_cast_evidence %}
@@ -264,27 +298,36 @@
                     </div>
                   {% endif %}
                   {% if r.movie.get('average_rating') is not none %}
-                    <div class="movie-card__meta">IMDb {{ '%.1f'|format(r.movie.average_rating) }}/10 · {{ '{:,}'.format(r.movie.vote_count) }} votes</div>
+                    <div class="movie-card__rating"><span aria-hidden="true">★</span> IMDb {{ '%.1f'|format(r.movie.average_rating) }}/10 <small>{{ '{:,}'.format(r.movie.vote_count) }} votes</small></div>
                   {% endif %}
                   {% if r.movie.notable_awards %}
                     <p class="movie-card__recognition">{{ r.movie.notable_awards | join(' · ') }}</p>
                   {% endif %}
-                  <p class="movie-card__synopsis">{{ r.movie.synopsis }}</p>
+                  {% set synopsis = r.movie.get('overview') or r.movie.get('synopsis') %}
+                  {% if synopsis and not synopsis.startswith('IMDb rating ') and not ('), a ' in synopsis and synopsis.endswith(' movie.')) %}<p class="movie-card__synopsis">{{ synopsis }}</p>{% endif %}
                   {% if r.movie.get('poster_source_url') %}<a class="movie-card__poster-credit" href="{{ r.movie.poster_source_url }}" target="_blank" rel="noopener noreferrer" data-i18n="commonsCredit">Poster image source: Wikimedia Commons</a>{% endif %}
-                  <strong class="movie-card__reasons-title" data-i18n="whyMatched">Why this matched</strong>
-                  <ul class="movie-card__reasons">
-                    {% for reason in r.reasons %}
-                      <li>
-                        <span class="reason-icon {{ 'reason-icon--ok' if reason.ok else 'reason-icon--miss' }}">{{ '✓' if reason.ok else '✗' }}</span>
-                        <span class="{{ 'reason-text--ok' if reason.ok else 'reason-text--miss' }}">{{ reason.text }}</span>
-                      </li>
-                    {% endfor %}
-                  </ul>
+                  <details class="match-details">
+                    <summary data-i18n="whyMatched">Why this matched</summary>
+                    <div class="match-details__scores">
+                      {% for key, label in [('genre', 'Genre'), ('mood', 'Mood'), ('theme', 'Theme'), ('runtime', 'Runtime'), ('keyword', 'Plot keywords')] %}
+                        {% set raw_score = r.breakdown.get(key) %}
+                        {% if key in ['genre', 'mood', 'theme'] and raw_score %}{% set score_value = raw_score.fraction %}{% else %}{% set score_value = raw_score %}{% endif %}
+                        {% if score_value is not none %}
+                          <div class="score-row"><span>{{ label }}</span><span class="score-track" role="img" aria-label="{{ label }} score {{ (score_value * 100)|round|int }} percent"><span style="--score-width: {{ (score_value * 100)|round|int }}%"></span></span><strong>{{ (score_value * 100)|round|int }}%</strong></div>
+                        {% endif %}
+                      {% endfor %}
+                    </div>
+                    <ul class="movie-card__reasons">
+                      {% for reason in r.reasons %}
+                        <li><span class="reason-icon {{ 'reason-icon--ok' if reason.ok else 'reason-icon--miss' }}">{{ '✓' if reason.ok else '✗' }}</span><span class="{{ 'reason-text--ok' if reason.ok else 'reason-text--miss' }}">{{ reason.text }}</span></li>
+                      {% endfor %}
+                    </ul>
+                  </details>
                   <form class="movie-card__feedback" action="{{ url_for('submit_feedback') }}" method="post">
                     <input type="hidden" name="query" value="{{ query }}" />
                     <input type="hidden" name="movie_id" value="{{ r.movie.id }}" />
-                    <button type="submit" name="relevant" value="1" data-i18n="relevant">Relevant</button>
-                    <button type="submit" name="relevant" value="0" data-i18n="notRelevant">Not relevant</button>
+                    <button type="submit" name="relevant" value="1" aria-label="Relevant" data-i18n-aria="relevant" title="Relevant"><span aria-hidden="true">👍</span><span class="sr-only" data-i18n="relevant">Relevant</span></button>
+                    <button type="submit" name="relevant" value="0" aria-label="Not relevant" data-i18n-aria="notRelevant" title="Not relevant"><span aria-hidden="true">👎</span><span class="sr-only" data-i18n="notRelevant">Not relevant</span></button>
                   </form>
                 </div>
               </article>
@@ -294,7 +337,7 @@
           <div class="results__list">
             {% for item in movies %}
               {% set movie = item.movie %}
-              <article class="movie-card movie-card--browse" data-sort-rank="{{ loop.index }}" data-sort-title="{{ movie.title }}" data-sort-rating="{{ movie.get('average_rating') or 0 }}" data-sort-votes="{{ movie.get('vote_count') or 0 }}" data-sort-year="{{ movie.get('release_year') or 0 }}">
+              <article class="movie-card movie-card--browse" data-detail-title="{{ movie.title }}" data-detail-year="{{ movie.get('release_year') or '' }}" data-detail-synopsis="{{ movie.get('overview') or movie.get('synopsis') or '' }}" data-sort-rank="{{ loop.index }}" data-sort-title="{{ movie.title }}" data-sort-rating="{{ movie.get('average_rating') or 0 }}" data-sort-votes="{{ movie.get('vote_count') or 0 }}" data-sort-year="{{ movie.get('release_year') or 0 }}">
                 <div class="movie-card__poster">
                   {% if movie_poster_url(movie) %}
                     <img src="{{ movie_poster_url(movie) }}" alt="{{ movie.title }} poster" data-poster-title="{{ movie.title }}" data-poster-fallback="{{ url_for('static', filename='poster-placeholder.svg') }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
@@ -305,7 +348,10 @@
                   {% endif %}
                 </div>
                 <div class="movie-card__content">
-                  <h3 class="movie-card__title">{{ movie.title }}</h3>
+                  <div class="movie-card__title-row"><h3 class="movie-card__title">{{ movie.title }}</h3>{% if movie.get('release_year') %}<span class="movie-card__year">({{ movie.release_year }})</span>{% endif %}</div>
+                  <button type="button" class="movie-card__detail-trigger" data-open-detail>Movie details</button>
+                  <template class="movie-card__cast">{% for person in (movie.get('cast') or movie.get('actors') or [])[:8] %}<li>{{ person.get('name', '') if person is mapping else person }}</li>{% endfor %}</template>
+                  {% if movie.get('release_year') %}<div class="movie-card__meta sr-only">· {{ movie.release_year }}</div>{% endif %}
                   {% if movie.get('original_title') and movie.original_title != movie.title %}<div class="movie-card__meta"><span data-i18n="originalTitle">Original title</span>: <span lang="und">{{ movie.original_title }}</span></div>{% endif %}
                   <div class="movie-card__meta">{{ movie.genres | map('title') | join(', ') }} · {{ movie.runtime }} min · {{ movie.release_year }}
                     {% if movie_origin_label(movie) %} · <span data-i18n="originLabel">Origin</span>: {{ movie_origin_label(movie) }}{% else %} · <span data-i18n="originUnavailable">Origin unavailable</span>{% endif %}
@@ -317,7 +363,8 @@
                   {% if movie.notable_awards %}
                     <p class="movie-card__recognition">{{ movie.notable_awards | join(' · ') }}</p>
                   {% endif %}
-                  <p class="movie-card__synopsis">{{ movie.synopsis }}</p>
+                  {% set synopsis = movie.get('overview') or movie.get('synopsis') %}
+                  {% if synopsis and not synopsis.startswith('IMDb rating ') and not ('), a ' in synopsis and synopsis.endswith(' movie.')) %}<p class="movie-card__synopsis">{{ synopsis }}</p>{% endif %}
                   {% if movie.get('poster_source_url') %}<a class="movie-card__poster-credit" href="{{ movie.poster_source_url }}" target="_blank" rel="noopener noreferrer" data-i18n="commonsCredit">Poster image source: Wikimedia Commons</a>{% endif %}
                 </div>
               </article>
@@ -331,9 +378,14 @@
         {% endif %}
         {% if total_pages > 1 and (searched or movies) %}
           <nav class="pagination pagination--bottom" aria-label="Movie pages" data-i18n-aria="paginationLabel">
-            {% if page_number > 1 %}
-              <a href="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="previousPage">Previous</a>
-            {% endif %}
+            <button type="button" class="pagination__button" data-page-url="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="previousPage" {% if page_number <= 1 %}disabled{% endif %}>Previous</button>
+            <div class="pagination__numbers">
+              {% for page_link in range(1, total_pages + 1) %}
+                {% if page_link == 1 or page_link == total_pages or page_number - 1 <= page_link <= page_number + 1 %}
+                  <a class="pagination__number" href="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_link, debug='1' if debug_enabled else '', drop=dropped) }}" {% if page_link == page_number %}aria-current="page"{% endif %}>{{ page_link }}</a>
+                {% elif page_link == 2 and page_number > 3 or page_link == total_pages - 1 and page_number < total_pages - 2 %}<span class="pagination__ellipsis" aria-hidden="true">…</span>{% endif %}
+              {% endfor %}
+            </div>
             <form class="page-jump" data-pagination-form method="get" action="{{ url_for('index') }}">
               <input type="hidden" name="q" value="{{ query }}" />
               {% for genre in selected_genres %}<input type="hidden" name="genre" value="{{ genre }}" />{% endfor %}
@@ -346,9 +398,7 @@
               <input id="page-bottom" class="page-jump__input" name="page" type="number" min="1" max="{{ total_pages }}" value="{{ page_number }}" inputmode="numeric" aria-label="Jump to page" />
               <span>of {{ total_pages }}</span>
             </form>
-            {% if page_number < total_pages %}
-              <a href="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="nextPage">Next</a>
-            {% endif %}
+            <button type="button" class="pagination__button" data-page-url="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="nextPage" {% if page_number >= total_pages %}disabled{% endif %}>Next</button>
           </nav>
         {% endif %}
     </section>
@@ -358,9 +408,20 @@
   <footer class="footer">
     <p>MOVIE_FINDER_GROUP4</p>
   </footer>
+  <aside class="movie-drawer" id="movie-drawer" role="dialog" aria-modal="true" aria-labelledby="movie-drawer-title" hidden>
+    <button type="button" class="movie-drawer__close" data-close-drawer aria-label="Close movie details" title="Close">×</button>
+    <img class="movie-drawer__poster" alt="" hidden />
+    <p class="movie-drawer__year"></p>
+    <h2 id="movie-drawer-title" class="movie-drawer__title"></h2>
+    <section><h3>Synopsis</h3><p class="movie-drawer__synopsis"></p></section>
+    <section class="movie-drawer__cast-section" hidden><h3>Cast</h3><ul class="movie-drawer__cast"></ul></section>
+    <button type="button" class="movie-drawer__similar" data-more-like-this>More like this</button>
+    <section class="movie-drawer__similar-results" aria-live="polite" hidden><h3>Related movies</h3><ul></ul></section>
+  </aside>
+  <button type="button" class="back-to-top" aria-label="Back to top" title="Back to top" hidden>↑</button>
 
-  <script src="{{ url_for('static', filename='js/smart-search.js', v='ui-upgrades-3') }}" defer></script>
-  <script src="{{ url_for('static', filename='js/poster-fallback.js') }}" defer></script>
-  <script src="{{ url_for('static', filename='js/ui-preferences.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/smart-search.js', v='ui-upgrades-5') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/poster-fallback.js', v='ui-upgrades-5') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/ui-preferences.js', v='ui-upgrades-5') }}" defer></script>
 </body>
 </html>

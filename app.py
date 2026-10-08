@@ -37,7 +37,7 @@ from nlp.query import build_structured_query, detect_country
 from nlp.tfidf import load_or_build_tfidf_model
 from nlp.scoring import is_excluded, rank_movies
 from nlp.explain import explain_match, title_case
-from nlp.conversation import build_assistant_message
+from nlp.conversation import build_alternative_queries, build_assistant_message
 from nlp.smart_search import MAX_CANDIDATES, allow_search, interpret_query, retrieve_candidates, rerank_candidates
 from nlp.cast_verification import classify_cast_gender, evaluate_cast_constraint
 
@@ -72,12 +72,6 @@ EXAMPLE_QUERIES = [
 ]
 PER_PAGE_OPTIONS = (12, 24, 48)
 DEFAULT_PER_PAGE = 12
-DEFAULT_ALTERNATIVE_QUERIES = [
-    "popular comedy movies",
-    "highly rated science fiction movies",
-    "mystery movies with an investigation",
-]
-
 NATIONALITY_ALIASES = {
     "american": "US", "british": "GB", "english": "GB", "indian": "IN",
     "japanese": "JP", "korean": "KR", "south korean": "KR", "chinese": "CN",
@@ -698,11 +692,7 @@ def index():
                 "search_notice": "No close matches found. This catalog cannot verify strict gender-based negatives such as 'no woman', so no movie can be confirmed as a true match.",
                 "assistant_message": build_assistant_message(query, 0),
                 "assistant_state": "empty",
-                "alternative_queries": [
-                    "movies with women",
-                    "movies featuring a strong female lead",
-                    "popular dramas and comedies",
-                ],
+                "alternative_queries": build_alternative_queries(understanding, preferences),
             })
             return render_template("index.html", **context)
         normalized_query = normalize_text(nationality_query).replace(",", " ").strip()
@@ -823,6 +813,7 @@ def index():
                 "rank": rank,
                 "movie": movie,
                 "percent": entry["percent"],
+                "breakdown": entry["breakdown"],
                 "poster_exists": poster_exists(movie),
                 "genres_display": ", ".join(title_case(g) for g in movie["genres"]),
                 "reasons": reasons,
@@ -884,7 +875,7 @@ def index():
         })
         if not all_results:
             context["result_count_label"] = "0 closest matches"
-            context["alternative_queries"] = understanding["alternative_queries"] or DEFAULT_ALTERNATIVE_QUERIES
+            context["alternative_queries"] = build_alternative_queries(understanding, query_preferences)
             if "No close matches found" not in search_notice:
                 search_notice = (search_notice + " " if search_notice else "") + "No close matches found. Try one of these searches:"
             context["search_notice"] = search_notice

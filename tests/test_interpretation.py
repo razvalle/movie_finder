@@ -9,6 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import app, describe_tag
+from nlp.conversation import build_alternative_queries
 
 
 def tag(label, value):
@@ -25,6 +26,21 @@ class DescribeTagTests(unittest.TestCase):
         self.assertEqual(describe_tag(tag("Year", "1990-1999")), "1990s")
         self.assertEqual(describe_tag(tag("Year", "2015-2020")), "from 2015-2020")
         self.assertEqual(describe_tag(tag("Year", "after 2010")), "after 2010")
+
+
+class AlternativeQueryTests(unittest.TestCase):
+    def test_alternatives_are_built_from_current_search_preferences(self):
+        alternatives = build_alternative_queries(
+            {"alternative_queries": []},
+            {"genres": ["mystery"], "moods": ["suspenseful"], "themes": ["investigation"]},
+        )
+
+        self.assertEqual(alternatives[0], "suspenseful investigation mystery movies")
+        self.assertIn("mystery movies", alternatives)
+        self.assertNotIn("popular comedy movies", alternatives)
+
+    def test_no_unrelated_defaults_for_unrecognized_search(self):
+        self.assertEqual(build_alternative_queries({"alternative_queries": []}), [])
 
 
 class InterpretationRouteTests(unittest.TestCase):
