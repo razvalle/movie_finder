@@ -54,7 +54,7 @@
               id="q"
               name="q"
               class="search__input"
-              rows="2"
+              rows="1"
               data-i18n-placeholder="searchPlaceholder"
               placeholder="e.g. I want something suspenseful but not horror, preferably a mystery under two hours."
               autocomplete="off"
@@ -84,8 +84,7 @@
             <div data-recent-items></div>
           </div>
         </div>
-        <details class="refine-panel">
-          <summary class="refine-panel__trigger">Refine <span aria-hidden="true">+</span></summary>
+        <div class="search__filters">
           <div class="filter-row">
           <label id="genre-picker-label" data-i18n="genreLabel">Genre</label>
           <details class="genre-picker" data-genre-menu>
@@ -121,7 +120,6 @@
             </select>
           </span>
           <button class="clear-filter" type="button" data-clear-filters data-i18n="clearAllFilters" {% if not selected_genres and not selected_awards %}hidden{% endif %}>Clear all filters</button>
-          <button class="refine-panel__close" type="button" data-close-refine>Done</button>
           </div>
           <details class="range-refinements">
             <summary>More filters</summary>
@@ -135,7 +133,7 @@
               <span class="range-unavailable" id="rating-range-note">Unavailable: the current local parser does not support minimum-rating filters.</span>
             </div>
           </details>
-        </details>
+        </div>
       </form>
       {% for conflict in filter_conflicts %}
         <p class="filter-conflict" data-i18n="{{ 'genreFilterConflict' if 'genre' in conflict else 'countryFilterConflict' }}">{{ conflict }}</p>
@@ -239,13 +237,6 @@
         {% if total_pages > 1 and (searched or movies) %}
           <nav class="pagination pagination--top" aria-label="Movie pages" data-i18n-aria="paginationLabel">
             <button type="button" class="pagination__button" data-page-url="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="previousPage" {% if page_number <= 1 %}disabled{% endif %}>Previous</button>
-            <div class="pagination__numbers">
-              {% for page_link in range(1, total_pages + 1) %}
-                {% if page_link == 1 or page_link == total_pages or page_number - 1 <= page_link <= page_number + 1 %}
-                  <a class="pagination__number" href="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_link, debug='1' if debug_enabled else '', drop=dropped) }}" {% if page_link == page_number %}aria-current="page"{% endif %}>{{ page_link }}</a>
-                {% elif page_link == 2 and page_number > 3 or page_link == total_pages - 1 and page_number < total_pages - 2 %}<span class="pagination__ellipsis" aria-hidden="true">…</span>{% endif %}
-              {% endfor %}
-            </div>
             <form class="page-jump" data-pagination-form method="get" action="{{ url_for('index') }}">
               <input type="hidden" name="q" value="{{ query }}" />
               {% for genre in selected_genres %}<input type="hidden" name="genre" value="{{ genre }}" />{% endfor %}
@@ -379,13 +370,6 @@
         {% if total_pages > 1 and (searched or movies) %}
           <nav class="pagination pagination--bottom" aria-label="Movie pages" data-i18n-aria="paginationLabel">
             <button type="button" class="pagination__button" data-page-url="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="previousPage" {% if page_number <= 1 %}disabled{% endif %}>Previous</button>
-            <div class="pagination__numbers">
-              {% for page_link in range(1, total_pages + 1) %}
-                {% if page_link == 1 or page_link == total_pages or page_number - 1 <= page_link <= page_number + 1 %}
-                  <a class="pagination__number" href="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_link, debug='1' if debug_enabled else '', drop=dropped) }}" {% if page_link == page_number %}aria-current="page"{% endif %}>{{ page_link }}</a>
-                {% elif page_link == 2 and page_number > 3 or page_link == total_pages - 1 and page_number < total_pages - 2 %}<span class="pagination__ellipsis" aria-hidden="true">…</span>{% endif %}
-              {% endfor %}
-            </div>
             <form class="page-jump" data-pagination-form method="get" action="{{ url_for('index') }}">
               <input type="hidden" name="q" value="{{ query }}" />
               {% for genre in selected_genres %}<input type="hidden" name="genre" value="{{ genre }}" />{% endfor %}

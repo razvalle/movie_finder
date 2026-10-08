@@ -725,15 +725,6 @@
     pageInput.addEventListener("change", navigateToPage);
   });
 
-  const refinePanel = form.querySelector(".refine-panel");
-  refinePanel?.addEventListener("toggle", () => {
-    document.body.classList.toggle("refine-open", refinePanel.open);
-  });
-  refinePanel?.querySelector("[data-close-refine]")?.addEventListener("click", () => {
-    refinePanel.open = false;
-    refinePanel.querySelector("summary")?.focus();
-  });
-
   document.querySelectorAll("[data-page-url]").forEach((pageButton) => {
     pageButton.addEventListener("click", () => {
       if (!pageButton.disabled) window.location.assign(pageButton.dataset.pageUrl);
@@ -754,7 +745,6 @@
     if (event.key === "Escape") {
       if (genreMenu?.open) genreMenu.open = false;
       if (drawer && !drawer.hidden) closeDrawer();
-      form.querySelector(".refine-panel")?.removeAttribute("open");
     }
     if (event.key === "/" && !event.ctrlKey && !event.metaKey && !event.altKey
       && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) {
