@@ -142,12 +142,25 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b"United Kingdom", response.data)
         self.assertIn(b"https://image.tmdb.org/t/p/w342/spanish.jpg", response.data)
 
+    def test_home_page_does_not_render_match_count_without_a_search(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertNotIn('data-result-count=', html)
+        self.assertNotIn('404553', html)
+        self.assertIn('All Movies', html)
+
     def test_ui_has_language_control_with_english_default_and_theme_toggle(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         self.assertIn('<a class="site-header__home" href="/" aria-label="Movie Finder home">', html)
         self.assertIn('id="ui-language"', html)
+        self.assertIn('data-clear-filters', html)
+        self.assertIn('id="genre-menu-search"', html)
+        self.assertIn('id="recent-searches"', html)
+        self.assertIn('id="result-sort"', html)
+        self.assertNotIn('data-result-count=', html)
         self.assertIn('<option value="en" lang="en" selected>English</option>', html)
         self.assertIn('<option value="es" lang="es">Español</option>', html)
         self.assertIn('<option value="tl" lang="tl">Tagalog</option>', html)

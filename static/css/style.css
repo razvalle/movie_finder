@@ -314,6 +314,13 @@ body {
   font-size: 0.85rem;
   color: var(--paper-200);
 }
+.results__controls { display: flex; align-items: center; gap: 0.7rem; }
+.results__sort-control { width: 150px; }
+.results__sort-control .genre-filter { min-height: 38px; font-size: 0.82rem; }
+
+.results__controls { display: flex; align-items: center; gap: 0.7rem; }
+.results__sort-control { width: 150px; }
+.results__sort-control .genre-filter { min-height: 38px; font-size: 0.82rem; }
 
 .results__list {
   display: flex;
@@ -619,6 +626,8 @@ body { background: var(--ink-950); color: var(--paper-100); }
 .dropdown-control--header .genre-filter { width: auto; }
 .clear-filter { border: 0; padding: 0.58rem 0.8rem; cursor: pointer; font: inherit; }
 .filter-conflict { margin: 0.7rem 0 0; color: var(--bad-red); font-size: 0.85rem; }
+.clear-filter { min-height: 40px; padding: 0.45rem 0.7rem; border: 1px solid var(--ink-600); border-radius: 4px; background: var(--ink-800); color: var(--paper-100); font: inherit; cursor: pointer; }
+.clear-filter:hover { border-color: var(--gold-500); }
 .debug-panel { margin: 1.25rem 0; padding: 1rem; border: 1px solid var(--ink-600); background: var(--ink-900); font-size: 0.86rem; }
 .debug-panel h2, .debug-panel h3 { margin: 0 0 0.7rem; font-size: 1rem; }
 .debug-panel h3 { margin-top: 1rem; }
@@ -748,7 +757,32 @@ body { background: var(--ink-950); color: var(--paper-100); }
   color: var(--paper-100);
   font-size: 0.85rem;
 }
+.genre-picker__option[hidden] { display: none; }
 .genre-picker__name { min-width: 0; overflow-wrap: anywhere; }
+.genre-picker__search {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 40px;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--ink-600);
+  border-radius: 4px;
+  background: var(--ink-800);
+  color: var(--paper-100);
+  font: inherit;
+}
+.genre-picker__empty { grid-column: 1 / -1; margin: 0; padding: 0.65rem; color: var(--paper-200); font-size: 0.85rem; }
+.genre-picker__search {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 40px;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--ink-600);
+  border-radius: 4px;
+  background: var(--ink-800);
+  color: var(--paper-100);
+  font: inherit;
+}
+.genre-picker__empty { grid-column: 1 / -1; margin: 0; padding: 0.65rem; color: var(--paper-200); font-size: 0.85rem; }
 .genre-picker__add {
   display: grid;
   place-items: center;
@@ -801,6 +835,14 @@ body { background: var(--ink-950); color: var(--paper-100); }
 .search-suggestion:last-child { border-bottom: 0; }
 .search-suggestion:hover, .search-suggestion:focus-visible { background: var(--ink-800); }
 .search-suggestion small { color: var(--paper-200); text-transform: capitalize; }
+.recent-searches__header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.65rem 0.85rem; border-bottom: 1px solid var(--ink-700); background: var(--ink-900); color: var(--paper-100); font-size: 0.85rem; }
+.recent-searches__header button { padding: 0.25rem 0; border: 0; background: transparent; color: var(--gold-400); font: inherit; cursor: pointer; }
+.recent-searches__header button:hover { color: var(--paper-100); }
+.recent-search:last-child { border-bottom: 0; }
+.recent-searches__header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.65rem 0.85rem; border-bottom: 1px solid var(--ink-700); background: var(--ink-900); color: var(--paper-100); font-size: 0.85rem; }
+.recent-searches__header button { padding: 0.25rem 0; border: 0; background: transparent; color: var(--gold-400); font: inherit; cursor: pointer; }
+.recent-searches__header button:hover { color: var(--paper-100); }
+.recent-search:last-child { border-bottom: 0; }
 .search-feedback:empty { display: none; }
 .assistant-message { margin: 0.85rem 0 0; color: var(--paper-100); line-height: 1.5; }
 .sr-only {
@@ -943,6 +985,8 @@ a:focus-visible {
   .interpretation__part .pref-tag__remove { min-width: 32px; min-height: 32px; }
 
   .results__header { align-items: flex-start; flex-direction: column; gap: 0.25rem; }
+  .results__controls { width: 100%; justify-content: space-between; }
+  .results__controls { width: 100%; justify-content: space-between; }
   .movie-card,
   .movie-card--browse { grid-template-columns: 88px minmax(0, 1fr); gap: 0.75rem; padding: 0.75rem; }
   .movie-card__poster { width: 100%; min-width: 0; }

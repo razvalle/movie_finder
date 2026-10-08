@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Movie Finder — by Mood &amp; Description</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='dropdown-triangle-2') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='ui-upgrades-3') }}" />
 </head>
 <body>
 
@@ -57,7 +57,7 @@
               placeholder="e.g. I want something suspenseful but not horror, preferably a mystery under two hours."
               autocomplete="off"
               aria-autocomplete="list"
-              aria-controls="search-suggestions"
+              aria-controls="search-suggestions recent-searches"
               aria-expanded="false"
             >{{ query }}</textarea>
             <div class="search__genre-controls">
@@ -74,6 +74,13 @@
           </div>
           <button class="search__button" type="submit" data-i18n="findButton">Find Movies</button>
           <div id="search-suggestions" class="search-suggestions" role="listbox" hidden></div>
+          <div id="recent-searches" class="search-suggestions recent-searches" role="listbox" hidden>
+            <div class="recent-searches__header">
+              <strong data-i18n="recentSearches">Recent searches</strong>
+              <button type="button" data-clear-recent data-i18n="clearRecentSearches">Clear history</button>
+            </div>
+            <div data-recent-items></div>
+          </div>
         </div>
         <div class="filter-row">
           <label id="genre-picker-label" data-i18n="genreLabel">Genre</label>
@@ -83,12 +90,15 @@
               <span class="genre-picker__chevron" aria-hidden="true"></span>
             </summary>
             <div class="genre-picker__menu" role="group" aria-label="Add genres">
+              <label class="sr-only" for="genre-menu-search" data-i18n="searchGenres">Search genres</label>
+              <input id="genre-menu-search" class="genre-picker__search" type="search" placeholder="Search genres" data-i18n-placeholder="searchGenres" autocomplete="off" />
               {% for genre in genres %}
-                <div class="genre-picker__option" data-genre-option>
+                <div class="genre-picker__option" data-genre-option data-genre-name="{{ genre }}">
                   <span class="genre-picker__name" data-i18n-genre="{{ genre }}">{{ genre|title }}</span>
                   <button class="genre-picker__add" type="button" data-add-genre="{{ genre }}" aria-label="Add {{ genre|title }} genre" title="Add {{ genre|title }}" {% if genre in selected_genres %}disabled{% endif %}>+</button>
                 </div>
               {% endfor %}
+              <p class="genre-picker__empty" data-no-genres data-i18n="noGenresMatch" hidden>No genres match.</p>
             </div>
           </details>
           <label for="awards" data-i18n="recognitionLabel">Recognition</label>
@@ -106,6 +116,7 @@
               {% endfor %}
             </select>
           </span>
+          <button class="clear-filter" type="button" data-clear-filters data-i18n="clearAllFilters" {% if not selected_genres and not selected_awards %}hidden{% endif %}>Clear all filters</button>
         </div>
       </form>
       {% for conflict in filter_conflicts %}
@@ -180,7 +191,20 @@
     <section class="results" aria-label="Movies" data-i18n-aria="moviesRegion">
         <div class="results__header">
           <h2 class="section-title" data-i18n="{{ 'recommendedMovies' if searched else 'allMovies' }}">{{ 'Recommended Movies' if searched else 'All Movies' }}</h2>
-          <span class="results__count" data-result-count="{{ result_count }}" data-result-kind="{{ 'exact' if 'exact' in result_count_label else 'closest' if result_count_label else 'browse' }}">{{ result_count_label or (result_count ~ ' match' ~ ('' if result_count == 1 else 'es')) }}</span>
+          <div class="results__controls">
+            {% if query or selected_genres or selected_awards or searched %}
+              <span class="results__count" role="status" aria-live="polite" data-result-count="{{ result_count }}" data-result-kind="{{ 'exact' if 'exact' in result_count_label else 'closest' if result_count_label else 'browse' }}">{{ result_count_label or (result_count ~ ' match' ~ ('' if result_count == 1 else 'es')) }}</span>
+            {% endif %}
+            <label class="sr-only" for="result-sort" data-i18n="sortResults">Sort results</label>
+            <span class="dropdown-control results__sort-control">
+              <select id="result-sort" class="genre-filter" aria-label="Sort results">
+                <option value="match" data-i18n="sortMatch">Best match</option>
+                <option value="popular" data-i18n="sortPopular">Most popular</option>
+                <option value="rating" data-i18n="sortRating">Highest rated</option>
+                <option value="newest" data-i18n="sortNewest">Newest</option>
+              </select>
+            </span>
+          </div>
         </div>
         {% if feedback_saved %}<p class="search-notice" role="status" data-i18n="feedbackSaved">Feedback saved. Thanks.</p>{% endif %}
 
@@ -210,7 +234,7 @@
         {% if searched and results %}
           <div class="results__list">
             {% for r in results %}
-              <article class="movie-card">
+              <article class="movie-card" data-sort-rank="{{ r.rank }}" data-sort-title="{{ r.movie.title }}" data-sort-rating="{{ r.movie.get('average_rating') or 0 }}" data-sort-votes="{{ r.movie.get('vote_count') or 0 }}" data-sort-year="{{ r.movie.get('release_year') or 0 }}">
                 <div class="movie-card__poster">
                   {% if movie_poster_url(r.movie) %}
                     <img src="{{ movie_poster_url(r.movie) }}" alt="{{ r.movie.title }} poster" data-poster-title="{{ r.movie.title }}" data-poster-fallback="{{ url_for('static', filename='poster-placeholder.svg') }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
@@ -270,7 +294,7 @@
           <div class="results__list">
             {% for item in movies %}
               {% set movie = item.movie %}
-              <article class="movie-card movie-card--browse">
+              <article class="movie-card movie-card--browse" data-sort-rank="{{ loop.index }}" data-sort-title="{{ movie.title }}" data-sort-rating="{{ movie.get('average_rating') or 0 }}" data-sort-votes="{{ movie.get('vote_count') or 0 }}" data-sort-year="{{ movie.get('release_year') or 0 }}">
                 <div class="movie-card__poster">
                   {% if movie_poster_url(movie) %}
                     <img src="{{ movie_poster_url(movie) }}" alt="{{ movie.title }} poster" data-poster-title="{{ movie.title }}" data-poster-fallback="{{ url_for('static', filename='poster-placeholder.svg') }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
@@ -335,7 +359,7 @@
     <p>MOVIE_FINDER_GROUP4</p>
   </footer>
 
-  <script src="{{ url_for('static', filename='js/smart-search.js', v='home-close-1') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/smart-search.js', v='ui-upgrades-3') }}" defer></script>
   <script src="{{ url_for('static', filename='js/poster-fallback.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/ui-preferences.js') }}" defer></script>
 </body>

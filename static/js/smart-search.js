@@ -11,6 +11,185 @@
   let activeController = null;
   let requestVersion = 0;
   let suggestionTimer = 0;
+  const recentPanel = document.querySelector("#recent-searches");
+  const recentItems = recentPanel?.querySelector("[data-recent-items]");
+  const clearRecentButton = recentPanel?.querySelector("[data-clear-recent]");
+  const clearFiltersButton = form.querySelector("[data-clear-filters]");
+  const genreMenuSearch = form.querySelector("#genre-menu-search");
+  const genreNoMatches = form.querySelector("[data-no-genres]");
+  const awardsFilter = form.querySelector("#awards");
+  const recentStorageKey = "movie-finder-recent-searches";
+  let resultSort = "match";
+
+  function readRecentSearches() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(recentStorageKey) || "[]");
+      return Array.isArray(saved)
+        ? saved.filter((item) => item && Array.isArray(item.genres)).map((item) => ({
+          query: String(item.query || ""),
+          genres: item.genres.filter((genre) => typeof genre === "string"),
+          awards: Array.isArray(item.awards) ? item.awards.filter((award) => typeof award === "string") : [],
+          perPage: String(item.perPage || "12"),
+        }))
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function closeRecentSearches() {
+    if (recentPanel) recentPanel.hidden = true;
+    if (!suggestions || suggestions.hidden) searchInput.setAttribute("aria-expanded", "false");
+  }
+
+  function renderRecentSearches() {
+    if (!recentItems) return;
+    recentItems.replaceChildren();
+    readRecentSearches().forEach((item) => {
+      const label = item.query || item.genres.join(", ") || (item.awards.length ? "Award winners" : "Filtered movies");
+      const option = document.createElement("button");
+      option.type = "button";
+      option.className = "search-suggestion recent-search";
+      option.setAttribute("role", "option");
+      const text = document.createElement("span");
+      text.textContent = label;
+      const detail = document.createElement("small");
+      detail.textContent = [...item.genres, ...item.awards].join(" · ");
+      option.append(text, detail);
+      option.addEventListener("click", () => restoreRecentSearch(item));
+      recentItems.append(option);
+    });
+  }
+
+  function showRecentSearches() {
+    if (!recentPanel || searchInput.value.trim()) return;
+    renderRecentSearches();
+    const hasItems = Boolean(recentItems?.childElementCount);
+    recentPanel.hidden = !hasItems;
+    if (hasItems) {
+      closeSuggestions();
+      searchInput.setAttribute("aria-expanded", "true");
+    }
+  }
+
+  function rememberSearch(params) {
+    const entry = {
+      query: (params.get("q") || "").trim(),
+      genres: params.getAll("genre"),
+      awards: params.getAll("awards").filter(Boolean),
+      perPage: params.get("per_page") || "12",
+    };
+    if (!entry.query && !entry.genres.length && !entry.awards.length) return;
+    const signature = JSON.stringify(entry);
+    const history = readRecentSearches().filter((item) => JSON.stringify(item) !== signature);
+    history.unshift(entry);
+    try {
+      localStorage.setItem(recentStorageKey, JSON.stringify(history.slice(0, 5)));
+    } catch {
+      return;
+    }
+  }
+
+  function updateClearFiltersButton() {
+    if (!clearFiltersButton) return;
+    const hasGenres = Boolean(genreChips?.querySelector("[data-selected-genre]"));
+    clearFiltersButton.hidden = !hasGenres && !awardsFilter?.value;
+  }
+
+  function filterGenreOptions() {
+    if (!genreMenuSearch || !genreMenu) return;
+    const query = genreMenuSearch.value.trim().toLocaleLowerCase();
+    let visibleCount = 0;
+    genreMenu.querySelectorAll("[data-genre-option]").forEach((option) => {
+      const name = option.querySelector(".genre-picker__name")?.textContent.toLocaleLowerCase() || "";
+      const key = (option.dataset.genreName || "").toLocaleLowerCase();
+      const matches = !query || name.includes(query) || key.includes(query);
+      option.hidden = !matches;
+      if (matches) visibleCount += 1;
+    });
+    if (genreNoMatches) genreNoMatches.hidden = visibleCount > 0;
+  }
+
+  function clearActiveFilters() {
+    genreChips?.querySelectorAll("[data-selected-genre]").forEach((chip) => {
+      const removeButton = chip.querySelector("[data-remove-genre]");
+      if (removeButton) removeGenreChip(removeButton, false);
+    });
+    if (awardsFilter) awardsFilter.value = "";
+    if (genreMenuSearch) genreMenuSearch.value = "";
+    filterGenreOptions();
+    updateClearFiltersButton();
+    form.requestSubmit(button);
+  }
+
+  function applyLocalSort() {
+    const list = document.querySelector(".results__list");
+    if (!list) return;
+    const cards = [...list.querySelectorAll(".movie-card")];
+    const number = (card, key) => Number(card.dataset[`sort${key}`]) || 0;
+    cards.sort((left, right) => {
+      if (resultSort === "popular") return number(right, "Votes") - number(left, "Votes") || number(right, "Rating") - number(left, "Rating");
+      if (resultSort === "rating") return number(right, "Rating") - number(left, "Rating") || number(right, "Votes") - number(left, "Votes");
+      if (resultSort === "newest") return number(right, "Year") - number(left, "Year") || number(right, "Rating") - number(left, "Rating");
+      return number(left, "Rank") - number(right, "Rank");
+    });
+    cards.forEach((card, index) => {
+      list.append(card);
+      const rank = card.querySelector(".movie-card__rank");
+      if (rank) rank.textContent = `#${index + 1}`;
+    });
+  }
+
+  function bindResultSort() {
+    const sortSelect = document.querySelector("#result-sort");
+    if (!sortSelect) return;
+    sortSelect.value = resultSort;
+    sortSelect.addEventListener("change", () => {
+      resultSort = sortSelect.value;
+      try {
+        sessionStorage.setItem("movie-finder-sort", resultSort);
+      } catch {
+        resultSort = sortSelect.value;
+      }
+      applyLocalSort();
+    });
+    applyLocalSort();
+  }
+
+  try {
+    const savedSort = sessionStorage.getItem("movie-finder-sort");
+    if (["match", "popular", "rating", "newest"].includes(savedSort)) resultSort = savedSort;
+  } catch {
+    resultSort = "match";
+  }
+
+  function clearRecentSearches() {
+    try {
+      localStorage.removeItem(recentStorageKey);
+    } catch {
+      return;
+    }
+    renderRecentSearches();
+    closeRecentSearches();
+  }
+
+  function restoreRecentSearch(item) {
+    searchInput.value = item.query;
+    genreChips?.querySelectorAll("[data-selected-genre]").forEach((chip) => {
+      const removeButton = chip.querySelector("[data-remove-genre]");
+      if (removeButton) removeGenreChip(removeButton, false);
+    });
+    item.genres.forEach((genre) => {
+      const addButton = genreMenu?.querySelector(`[data-add-genre="${CSS.escape(genre)}"]`);
+      if (addButton) addGenreChip(addButton, false);
+    });
+    if (awardsFilter) awardsFilter.value = item.awards[0] || "";
+    const perPage = form.querySelector("#per_page");
+    if (perPage && [...perPage.options].some((option) => option.value === item.perPage)) perPage.value = item.perPage;
+    updateClearFiltersButton();
+    closeRecentSearches();
+    form.requestSubmit(button);
+  }
 
   function closeSuggestions() {
     if (!suggestions) return;
@@ -30,6 +209,7 @@
 
   function renderSuggestions(items) {
     if (!suggestions) return;
+    closeRecentSearches();
     suggestions.innerHTML = items.map((item) => `
       <button type="button" role="option" class="search-suggestion" data-suggestion="${escapeHtml(item.text)}">
         <span>${escapeHtml(item.text)}</span>
@@ -73,6 +253,7 @@
     activeController = controller;
     const version = ++requestVersion;
     const params = new URLSearchParams(new FormData(form, event.submitter));
+    rememberSearch(params);
     const url = `${form.action}?${params.toString()}`;
     button.disabled = true;
     button.textContent = window.movieFinderText?.("searchingButton") || "Searching...";
@@ -95,6 +276,7 @@
         const currentResults = document.querySelector(".results");
         if (!nextResults || !currentResults) throw new Error("Search results missing");
         currentResults.replaceWith(nextResults);
+        bindResultSort();
 
         const currentFeedback = document.querySelector(".search-feedback");
         const nextFeedback = nextPage.querySelector(".search-feedback");
@@ -108,7 +290,7 @@
         else if (nextDebug) nextResults.before(nextDebug);
 
         window.history.pushState({}, "", url);
-        status.textContent = "";
+        status.textContent = nextResults.querySelector(".results__count")?.textContent || "";
       } catch (error) {
         if (version !== requestVersion) return;
         if (error.name === "AbortError") {
@@ -139,6 +321,7 @@
   });
 
   searchInput.addEventListener("input", () => {
+    closeRecentSearches();
     window.clearTimeout(suggestionTimer);
     suggestionTimer = window.setTimeout(loadSuggestions, 140);
     if (!activeController) return;
@@ -151,6 +334,7 @@
     form.removeAttribute("aria-busy");
     status.textContent = "";
   });
+  searchInput.addEventListener("focus", showRecentSearches);
 
   form.querySelectorAll(".filter-row select[name]").forEach((filter) => {
     filter.addEventListener("change", () => form.requestSubmit(button));
@@ -159,7 +343,7 @@
   const genreChips = form.querySelector("[data-genre-chips]");
   const genreMenu = form.querySelector("[data-genre-menu]");
 
-  function addGenreChip(addButton) {
+  function addGenreChip(addButton, submit = true) {
     const value = addButton.dataset.addGenre;
     const option = addButton.closest("[data-genre-option]");
     const labelText = option?.querySelector(".genre-picker__name")?.textContent.trim();
@@ -191,19 +375,21 @@
     chip.append(hiddenInput, label, removeButton);
     genreChips.append(chip);
     addButton.disabled = true;
+    updateClearFiltersButton();
     window.dispatchEvent(new Event("movie-finder:content-updated"));
-    form.requestSubmit(button);
+    if (submit) form.requestSubmit(button);
   }
 
-  function removeGenreChip(removeButton) {
+  function removeGenreChip(removeButton, submit = true) {
     const chip = removeButton.closest("[data-selected-genre]");
     if (!chip) return;
     const value = chip.dataset.selectedGenre;
     const addButton = genreMenu?.querySelector(`[data-add-genre="${CSS.escape(value)}"]`);
     if (addButton) addButton.disabled = false;
     chip.remove();
+    updateClearFiltersButton();
     window.dispatchEvent(new Event("movie-finder:content-updated"));
-    form.requestSubmit(button);
+    if (submit) form.requestSubmit(button);
   }
 
   genreMenu?.querySelectorAll("[data-add-genre]").forEach((addButton) => {
@@ -211,6 +397,14 @@
   });
   genreChips?.querySelectorAll("[data-remove-genre]").forEach((removeButton) => {
     removeButton.addEventListener("click", () => removeGenreChip(removeButton));
+  });
+
+  genreMenuSearch?.addEventListener("input", filterGenreOptions);
+  clearFiltersButton?.addEventListener("click", clearActiveFilters);
+  awardsFilter?.addEventListener("change", updateClearFiltersButton);
+  clearRecentButton?.addEventListener("click", clearRecentSearches);
+  document.querySelectorAll("#genre-menu-search, [data-clear-filters], [data-clear-recent]").forEach((control) => {
+    control.addEventListener("click", (event) => event.stopPropagation());
   });
 
   document.querySelectorAll("[data-pagination-form]").forEach((paginationForm) => {
@@ -230,7 +424,12 @@
 
   document.addEventListener("click", (event) => {
     if (suggestions && !suggestions.contains(event.target) && event.target !== searchInput) closeSuggestions();
+    if (recentPanel && !recentPanel.contains(event.target) && event.target !== searchInput) closeRecentSearches();
     if (genreMenu?.open && !genreMenu.contains(event.target)) genreMenu.open = false;
+  });
+
+  document.addEventListener("click", (event) => {
+    if (event.target === searchInput) showRecentSearches();
   });
 
   document.addEventListener("keydown", (event) => {
@@ -238,4 +437,8 @@
   });
 
   window.addEventListener("popstate", () => window.location.reload());
+  renderRecentSearches();
+  if (!searchInput.value.trim()) showRecentSearches();
+  bindResultSort();
+  updateClearFiltersButton();
 })();
