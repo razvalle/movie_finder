@@ -315,6 +315,7 @@
     });
     html += escapeHtml(value.slice(cursor));
     highlightLayer.innerHTML = html;
+    highlightLayer.style.setProperty("--search-input-height", `${searchInput.getBoundingClientRect().height}px`);
     highlightLayer.hidden = !value;
     searchInput.classList.toggle("has-highlight", Boolean(value));
     highlightLayer.scrollTop = searchInput.scrollTop;

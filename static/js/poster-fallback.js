@@ -1,9 +1,29 @@
+const posterTimers = new WeakMap();
+
+function markPosterLoaded(image) {
+  const timer = posterTimers.get(image);
+  if (timer) window.clearTimeout(timer);
+  image.closest(".movie-card__poster")?.classList.add("is-loaded");
+}
+
+function usePosterFallback(image) {
+  if (image.dataset.posterFallbackApplied) {
+    markPosterLoaded(image);
+    return;
+  }
+  if (!image.dataset.posterFallback) {
+    markPosterLoaded(image);
+    return;
+  }
+  image.dataset.posterFallbackApplied = "true";
+  image.loading = "eager";
+  image.src = image.dataset.posterFallback;
+}
+
 document.addEventListener("error", (event) => {
   const image = event.target;
-  if (!(image instanceof HTMLImageElement) || !image.dataset.posterFallback) return;
-  if (image.dataset.posterFallbackApplied) return;
-  image.dataset.posterFallbackApplied = "true";
-  image.src = image.dataset.posterFallback;
+  if (!(image instanceof HTMLImageElement)) return;
+  usePosterFallback(image);
 }, true);
 
 document.querySelectorAll(".site-header__logo").forEach((logo) => {
@@ -15,8 +35,27 @@ document.querySelectorAll(".site-header__logo").forEach((logo) => {
   logo.addEventListener("load", showLogo, { once: true });
 });
 
-document.querySelectorAll(".movie-card__poster img").forEach((poster) => {
-  const markLoaded = () => poster.closest(".movie-card__poster")?.classList.add("is-loaded");
-  if (poster.complete && poster.naturalWidth > 0) markLoaded();
-  else poster.addEventListener("load", markLoaded, { once: true });
-});
+function initializePosters() {
+  document.querySelectorAll(".movie-card__poster img").forEach((poster) => {
+    if (!poster.dataset.posterLoadBound) {
+      poster.dataset.posterLoadBound = "true";
+      poster.addEventListener("load", () => markPosterLoaded(poster), { once: true });
+    }
+    if (poster.complete) {
+      if (poster.naturalWidth > 0) markPosterLoaded(poster);
+      else if (poster.getAttribute("src")) usePosterFallback(poster);
+      return;
+    }
+    const bounds = poster.getBoundingClientRect();
+    const nearViewport = bounds.bottom >= 0 && bounds.top <= window.innerHeight + 240;
+    if (!nearViewport) return;
+    poster.loading = "eager";
+    if (!posterTimers.has(poster)) {
+      posterTimers.set(poster, window.setTimeout(() => usePosterFallback(poster), 7000));
+    }
+  });
+}
+
+initializePosters();
+window.addEventListener("movie-finder:content-updated", initializePosters);
+window.addEventListener("scroll", initializePosters, { passive: true });
