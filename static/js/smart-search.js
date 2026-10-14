@@ -673,7 +673,7 @@
     removeButton.dataset.removeGenre = value;
     removeButton.setAttribute("aria-label", `Remove ${labelText} genre`);
     removeButton.title = `Remove ${labelText}`;
-    removeButton.textContent = "×";
+    removeButton.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-x"></use></svg>';
     removeButton.addEventListener("click", () => removeGenreChip(removeButton));
 
     chip.append(hiddenInput, label, removeButton);

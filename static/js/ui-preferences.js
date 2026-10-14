@@ -333,7 +333,7 @@
     const selected = theme === "dark" ? "dark" : "light";
     root.dataset.theme = selected;
     if (!themeButton || !themeIcon) return;
-    themeIcon.textContent = selected === "dark" ? "☀" : "☾";
+    themeIcon.dataset.themeIcon = selected === "dark" ? "sun" : "moon";
   }
 
   function applyLanguage(language) {
