@@ -105,6 +105,9 @@
             </div>
           </div>
           <button class="search__button" type="submit" data-i18n="findButton">Find Movies</button>
+          {% if query %}
+            <a class="search__clear" href="{{ url_for('index') }}">Clear search</a>
+          {% endif %}
           <div id="search-suggestions" class="search-suggestions" role="listbox" hidden></div>
           <div id="recent-searches" class="search-suggestions recent-searches" role="listbox" hidden>
             <div class="recent-searches__header">
