@@ -21,6 +21,7 @@
   const awardsFilter = form.querySelector("#awards");
   const recentStorageKey = "movie-finder-recent-searches";
   let resultSort = "match";
+  let hasSearchText = Boolean(searchInput.value.trim());
 
   function readRecentSearches() {
     try {
@@ -629,16 +630,24 @@
     updateSearchHighlight();
     window.clearTimeout(suggestionTimer);
     suggestionTimer = window.setTimeout(loadSuggestions, 140);
-    if (!activeController) return;
-    requestVersion += 1;
-    window.clearTimeout(timer);
-    activeController.abort();
-    activeController = null;
-    setSearchLoading(false);
-    button.disabled = false;
-    button.textContent = originalLabel;
-    form.removeAttribute("aria-busy");
-    status.textContent = "";
+    if (activeController) {
+      requestVersion += 1;
+      window.clearTimeout(timer);
+      activeController.abort();
+      activeController = null;
+      setSearchLoading(false);
+      button.disabled = false;
+      button.textContent = originalLabel;
+      form.removeAttribute("aria-busy");
+      status.textContent = "";
+    }
+    if (searchInput.value.trim()) {
+      hasSearchText = true;
+    } else if (hasSearchText) {
+      hasSearchText = false;
+      const params = new URLSearchParams(new FormData(form));
+      window.location.assign(`${form.action}?${params.toString()}`);
+    }
   });
   searchInput.addEventListener("scroll", updateSearchHighlight);
   searchInput.addEventListener("focus", showRecentSearches);
