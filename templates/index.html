@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Movie Finder — by Mood &amp; Description</title>
-<link rel="icon" href="{{ url_for('static', filename='images/movie-finder-logo.svg') }}" type="image/svg+xml" />
+<link rel="icon" href="{{ url_for('static', filename='images/movie-finder-logo.gif') }}" type="image/gif" />
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='visual-layer-4') }}" />
 </head>
 <body>
@@ -30,7 +30,7 @@
     <symbol id="icon-film-reel" viewBox="0 0 64 64"><circle cx="32" cy="32" r="27"/><circle cx="32" cy="32" r="6"/><circle cx="32" cy="16" r="4"/><circle cx="45.9" cy="24" r="4"/><circle cx="45.9" cy="40" r="4"/><circle cx="32" cy="48" r="4"/><circle cx="18.1" cy="40" r="4"/><circle cx="18.1" cy="24" r="4"/></symbol>
   </svg>
   <div class="loading-screen" data-loading-screen aria-hidden="true">
-    <img src="{{ url_for('static', filename='images/movie-finder-logo.svg') }}" alt="" />
+    <img src="{{ url_for('static', filename='images/movie-finder-logo.gif') }}" alt="" onerror="this.onerror=null; this.src='{{ url_for('static', filename='images/movie-finder-logo.svg') }}';" />
     <span>Movie Finder</span>
   </div>
 
@@ -38,7 +38,7 @@
     <div class="site-header__inner">
       <div class="site-header__brand">
         <a class="site-header__home" href="{{ url_for('index') }}" aria-label="Movie Finder home">
-          <img class="site-header__logo" src="{{ url_for('static', filename='images/movie-finder-logo.svg') }}" alt="Movie Finder logo" width="56" height="56" />
+          <img class="site-header__logo" src="{{ url_for('static', filename='images/movie-finder-logo.gif') }}" alt="Movie Finder logo" width="56" height="56" onerror="this.onerror=null; this.src='{{ url_for('static', filename='images/movie-finder-logo.svg') }}';" />
         </a>
         <div>
           <h1 data-i18n="brand">Movie Finder</h1>
