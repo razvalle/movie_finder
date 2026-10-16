@@ -105,6 +105,7 @@
     const genericSynopsis = synopsisText.startsWith("IMDb rating ") || (synopsisText.includes("), a ") && synopsisText.endsWith(" movie."));
     synopsis.textContent = genericSynopsis ? "" : synopsisText;
     synopsis.hidden = !synopsis.textContent;
+    modal.querySelector("[data-movie-description-label]").hidden = synopsis.hidden;
 
     const cast = templateText(card, ".movie-card__detail-cast");
     const castRow = modal.querySelector("[data-modal-cast-row]");

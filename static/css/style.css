@@ -1492,6 +1492,12 @@ html[data-theme="dark"][data-accent="violet"] { --gold-500: var(--accent-violet)
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+.movie-compare-toggle { display: none !important; }
+.movie-modal__hero-image { inset: 0; width: 100%; height: 100%; object-fit: contain; filter: none; opacity: 1; }
+.movie-modal__description-label { margin: 0 0 0.35rem; color: var(--paper-200); font-size: 0.95rem; }
+.movie-modal__description-label[hidden] { display: none !important; }
+#movie-modal .movie-modal__hero-image { object-fit: cover; }
 .support-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.55rem 0; }
 .support-actions button, .support-examples button, .help-examples button { min-height: 44px; padding: 0.5rem 0.75rem; border: 1px solid var(--surface-border); border-radius: var(--control-radius); background: var(--surface-raised); color: var(--paper-100); font: inherit; text-align: left; cursor: pointer; }
 .support-actions button:hover, .support-examples button:hover, .help-examples button:hover { border-color: var(--gold-400); background: var(--selection-surface); }
