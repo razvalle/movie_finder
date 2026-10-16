@@ -524,6 +524,12 @@
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (!searchInput.value.trim()) {
+      const params = new URLSearchParams(new FormData(form, event.submitter));
+      rememberSearch(params);
+      window.location.assign(`${form.action}?${params.toString()}`);
+      return;
+    }
     const restoreLabel = button.textContent;
     window.clearTimeout(timer);
     activeController?.abort();
