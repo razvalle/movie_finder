@@ -166,10 +166,6 @@
         </div>
       </form>
       {% if not query %}
-        <div class="home-start" aria-labelledby="home-start-title">
-          <svg class="icon home-start__reel"><use href="#icon-film-reel"></use></svg>
-          <div><strong id="home-start-title">Start here</strong><p data-i18n="headerSubtitle">Search by description or browse movies by genre.</p></div>
-        </div>
         <section class="mood-picks" aria-labelledby="mood-picks-title">
           <h2 id="mood-picks-title">Pick a mood</h2>
           <div class="mood-picks__tiles">
@@ -281,31 +277,22 @@
             {% if query or selected_genres or selected_awards or searched %}
               <span class="results__count" role="status" aria-live="polite" data-result-count="{{ result_count }}" data-result-kind="{{ 'exact' if 'exact' in result_count_label else 'closest' if result_count_label else 'browse' }}">{{ result_count_label or (result_count ~ ' match' ~ ('' if result_count == 1 else 'es')) }}</span>
             {% endif %}
-            <label class="sr-only" for="result-sort" data-i18n="sortResults">Sort results</label>
-            <span class="dropdown-control results__sort-control">
-              <select id="result-sort" class="genre-filter" aria-label="Sort results">
-                <option value="match" data-i18n="sortMatch">Best match</option>
-                <option value="popular" data-i18n="sortPopular">Most popular</option>
-                <option value="rating" data-i18n="sortRating">Highest rated</option>
-                <option value="newest" data-i18n="sortNewest">Newest</option>
-              </select>
-            </span>
-            <div class="view-toggle" role="group" aria-label="Result layout">
-              <button type="button" data-view-mode="grid" aria-label="Grid view" aria-pressed="true" title="Grid view"><svg class="icon"><use href="#icon-grid"></use></svg></button>
-              <button type="button" data-view-mode="list" aria-label="List view" aria-pressed="false" title="List view"><svg class="icon"><use href="#icon-list"></use></svg></button>
+            <div class="results__view-controls">
+              <label class="sr-only" for="result-sort" data-i18n="sortResults">Sort results</label>
+              <span class="dropdown-control results__sort-control">
+                <select id="result-sort" class="genre-filter" aria-label="Sort results">
+                  <option value="match" data-i18n="sortMatch">Best match</option>
+                  <option value="popular" data-i18n="sortPopular">Most popular</option>
+                  <option value="rating" data-i18n="sortRating">Highest rated</option>
+                  <option value="newest" data-i18n="sortNewest">Newest</option>
+                </select>
+              </span>
+              <div class="view-toggle" role="group" aria-label="Result layout">
+                <button type="button" data-view-mode="grid" aria-label="Grid view" aria-pressed="true" title="Grid view"><svg class="icon"><use href="#icon-grid"></use></svg></button>
+                <button type="button" data-view-mode="list" aria-label="List view" aria-pressed="false" title="List view"><svg class="icon"><use href="#icon-list"></use></svg></button>
+              </div>
             </div>
-            <label class="sr-only" for="result-group-mode">Group results</label>
-            <select id="result-group-mode" class="genre-filter result-group-mode" data-group-mode aria-label="Group results">
-              <option value="">Group by</option>
-              <option value="decade">Group by decade</option>
-              <option value="genre">Group by genre</option>
-            </select>
-            <div class="discovery-actions">
-              <button type="button" data-surprise-movie>Surprise me</button>
-              <button type="button" data-copy-search-link>Copy link</button>
-              <span class="discovery-actions__status" data-copy-link-status role="status" aria-live="polite"></span>
-              <span class="discovery-actions__status" data-compare-status role="status" aria-live="polite"></span>
-            </div>
+            <span class="sr-only" data-compare-status role="status" aria-live="polite"></span>
           </div>
         </div>
         {% if result_count %}

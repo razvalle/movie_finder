@@ -1070,6 +1070,7 @@ body.movie-modal-open { overflow: hidden; }
 .mood-picks__tiles button, .discovery-actions button, .movie-compare-toggle { min-height: 44px; padding: 0.45rem 0.8rem; border: 1px solid var(--surface-border); border-radius: var(--control-radius); background: var(--surface-raised); color: var(--paper-100); font: inherit; cursor: pointer; }
 .mood-picks__tiles button:hover, .discovery-actions button:hover, .movie-compare-toggle:hover { border-color: var(--gold-400); background: var(--selection-surface); }
 .results__controls { flex-wrap: wrap; }
+.results__view-controls { display: flex; align-items: center; gap: 0.7rem; margin-left: auto; }
 .discovery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
 .discovery-actions__status { color: var(--paper-200); font-size: 0.78rem; }
 .discovery-actions button:disabled { opacity: 0.55; cursor: not-allowed; }
