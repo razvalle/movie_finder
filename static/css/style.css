@@ -1274,8 +1274,8 @@ a:focus-visible {
 
 body { font-size: 15px; }
 .stage, .site-header__inner { max-width: var(--content-width); }
-.site-header__logo { visibility: hidden; }
-.site-header__logo.is-loaded { visibility: visible; }
+.site-header__logo { visibility: visible; opacity: 1; }
+.site-header__logo.is-loaded { visibility: visible; opacity: 1; }
 .search__entry .search__input { border: 0; box-shadow: none; }
 .search__entry:focus-within {
   border-color: var(--gold-500);
