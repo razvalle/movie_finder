@@ -42,6 +42,7 @@
     searchInput.dispatchEvent(new Event("input", { bubbles: true }));
     closeDialog(dialog, false);
     searchInput.focus();
+    searchInput.form?.requestSubmit(searchInput.form.querySelector(".search__button"));
   }
 
   function showOffline(message) {

@@ -16,7 +16,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from .normalize import normalize_text
-from .query import build_structured_query
+from .query import EXPLICIT_SYNTAX_TOKENS, build_structured_query
+from .runtime import WORD_NUMBERS
 from .similarity import cosine_similarity, vector_norm
 from .tfidf import build_tfidf_model, simple_word_tokens, vectorize_query
 
@@ -300,6 +301,9 @@ def local_understanding(raw_query):
     structured = build_structured_query(raw_query)
     preferences = structured["preferences"]
     keywords = list(preferences["free_text_keywords"])
+    runtime = preferences["runtime"]
+    if any(runtime.get(key) is not None for key in ("min", "max", "target")):
+        keywords = [keyword for keyword in keywords if keyword not in WORD_NUMBERS]
     no_twist_ending = bool(re.search(
         r"\b(?:not|no|without|avoid|avoiding)\s+(?:a\s+|any\s+)?twist\b|\bending\s+(?:is\s+)?not\s+(?:a\s+)?twist\b",
         normalize_text(raw_query),
@@ -444,13 +448,27 @@ def _get_bm25_index(movies):
         return index
 
 
+def _constraint_words(understanding):
+    runtime = understanding.get("filters", {}).get("runtime", {})
+    if any(runtime.get(key) is not None for key in ("min", "max", "target")):
+        return EXPLICIT_SYNTAX_TOKENS | set(WORD_NUMBERS)
+    return EXPLICIT_SYNTAX_TOKENS
+
+
 def _query_terms(raw_query, understanding):
-    sources = [_remove_negated_concepts(raw_query), _remove_negated_concepts(understanding["core_intent"]), *understanding["keywords"],
-               *understanding["expanded_concepts"], *understanding["example_titles"]]
+    sources = [
+        _remove_negated_concepts(raw_query),
+        _remove_negated_concepts(understanding.get("core_intent", "")),
+        *understanding.get("keywords", []),
+        *understanding.get("expanded_concepts", []),
+        *understanding.get("example_titles", []),
+    ]
     words = simple_word_tokens(" ".join(sources))
+    constraint_words = _constraint_words(understanding)
     return list(dict.fromkeys(
         word for word in words
-        if word not in STOP_WORDS and len(word) > 1 and not re.fullmatch(r"(?:19|20)\d{2}", word)
+        if word not in STOP_WORDS and word not in constraint_words and len(word) > 1
+        and not re.fullmatch(r"(?:\d{2,4})s?", word)
     ))
 
 
@@ -463,9 +481,15 @@ def _remove_negated_concepts(text):
 
 
 def _raw_query_terms(raw_query):
+    return _raw_query_terms_from_understanding(raw_query, local_understanding(raw_query))
+
+
+def _raw_query_terms_from_understanding(raw_query, understanding):
+    constraint_words = _constraint_words(understanding)
     return list(dict.fromkeys(
         word for word in simple_word_tokens(_remove_negated_concepts(raw_query))
-        if word not in STOP_WORDS and len(word) > 1 and not re.fullmatch(r"(?:19|20)\d{2}", word)
+        if word not in STOP_WORDS and word not in constraint_words and len(word) > 1
+        and not re.fullmatch(r"(?:\d{2,4})s?", word)
     ))
 
 
@@ -565,7 +589,16 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
         return []
     terms = _query_terms(raw_query, understanding)
     terms = list(dict.fromkeys(terms + _similar_movie_terms(understanding, movies)))
-    raw_terms = _raw_query_terms(raw_query)
+    raw_terms = _raw_query_terms_from_understanding(raw_query, understanding)
+    structured_terms = set(understanding.get("genres", [])) | set(understanding.get("mood_tone", []))
+    if (
+        not understanding.get("required_terms")
+        and not understanding.get("keywords")
+        and not understanding.get("expanded_concepts")
+        and raw_terms
+        and set(raw_terms) <= structured_terms
+    ):
+        raw_terms = []
     lexical_scores = {}
     if len(movies) <= 5000:
         lexical_index = _get_bm25_index(movies)

@@ -39,6 +39,32 @@ from pathlib import Path
 from .award_winners import annotate_awards
 
 
+def _restore_curated_search_metadata(imported_movies, curated_movies):
+    curated_by_title_year = {
+        (movie["title"].casefold(), movie.get("release_year")): movie
+        for movie in curated_movies
+    }
+    for movie in imported_movies:
+        key = (movie.get("title", "").casefold(), movie.get("release_year"))
+        curated = curated_by_title_year.get(key)
+        if not curated:
+            continue
+
+        synopsis = movie.get("synopsis") or ""
+        template_prefix = f"{movie.get('title')} ({movie.get('release_year')}), a "
+        if curated.get("synopsis") and (
+            not synopsis or (synopsis.startswith(template_prefix) and synopsis.endswith(" movie."))
+        ):
+            movie["synopsis"] = curated["synopsis"]
+
+        for field in ("themes", "mood_tags", "keywords", "content_descriptors"):
+            values = curated.get(field) or []
+            if values:
+                movie[field] = list(dict.fromkeys([*(movie.get(field) or []), *values]))
+
+    return imported_movies
+
+
 MOVIES = [
     {
         "id": 1,
@@ -822,13 +848,18 @@ MOVIES = [
     },
 ]
 
+CURATED_MOVIES = list(MOVIES)
+
 from .generated_movies import GENERATED_MOVIES
 
 MOVIES.extend(GENERATED_MOVIES)
 
 REAL_CATALOG_PATH = Path(__file__).with_name("imdb_movies.json")
 if REAL_CATALOG_PATH.is_file():
-    MOVIES = json.loads(REAL_CATALOG_PATH.read_text(encoding="utf-8"))
+    MOVIES = _restore_curated_search_metadata(
+        json.loads(REAL_CATALOG_PATH.read_text(encoding="utf-8")),
+        CURATED_MOVIES,
+    )
 
 CAST_ENRICHMENT_PATH = Path(__file__).with_name("movie_cast_enrichment.json")
 if CAST_ENRICHMENT_PATH.is_file():

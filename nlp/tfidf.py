@@ -14,6 +14,7 @@ pretrained model or embedding is used anywhere in this file.
 -----------------------------------------------------------------------
 """
 
+import hashlib
 import math
 import pickle
 import re
@@ -103,7 +104,18 @@ def load_or_build_tfidf_model(movies, cache_path, source_path=None):
     """Load a cached model when the catalog has not changed."""
     cache_path = Path(cache_path)
     source_stamp = Path(source_path).stat().st_mtime_ns if source_path and Path(source_path).exists() else None
-    fingerprint = (len(movies), source_stamp, movies[0].get("id") if movies else None, movies[-1].get("id") if movies else None)
+    content_digest = hashlib.sha256()
+    for movie in movies:
+        document = movie_to_document_text(movie).encode("utf-8")
+        content_digest.update(len(document).to_bytes(8, "big"))
+        content_digest.update(document)
+    fingerprint = (
+        len(movies),
+        source_stamp,
+        movies[0].get("id") if movies else None,
+        movies[-1].get("id") if movies else None,
+        content_digest.hexdigest(),
+    )
 
     if cache_path.exists():
         try:
