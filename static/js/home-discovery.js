@@ -1,7 +1,5 @@
 (() => {
   const cards = [...document.querySelectorAll(".movie-card[data-detail-title]")];
-  const searchInput = document.querySelector("#q");
-  const searchForm = document.querySelector(".search__form");
   const surpriseButton = document.querySelector("[data-surprise-movie]");
   const copyButton = document.querySelector("[data-copy-search-link]");
   const copyStatus = document.querySelector("[data-copy-link-status]");
@@ -21,13 +19,6 @@
 
   function openMovie(card) {
     card.click();
-  }
-
-  function submitMoodSearch(event) {
-    const tile = event.target.closest("[data-mood-query]");
-    if (!tile || !searchInput || !searchForm) return;
-    searchInput.value = tile.dataset.moodQuery;
-    searchForm.requestSubmit(searchForm.querySelector(".search__button"));
   }
 
   function surpriseMe() {
@@ -141,7 +132,6 @@
     }
   }
 
-  document.querySelector(".mood-picks")?.addEventListener("click", submitMoodSearch);
   surpriseButton?.addEventListener("click", surpriseMe);
   copyButton?.addEventListener("click", copySearchLink);
   cards.forEach((card) => {

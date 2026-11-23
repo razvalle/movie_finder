@@ -19,6 +19,16 @@ Two-phase approach:
 -----------------------------------------------------------------------
 """
 
+import re
+import unicodedata
+from functools import lru_cache
+
+from data.synonyms import (
+    CONTENT_DESCRIPTOR_SYNONYMS,
+    GENRE_SYNONYMS,
+    MOOD_SYNONYMS,
+    THEME_SYNONYMS,
+)
 from .similarity import cosine_similarity, vector_norm
 from .tfidf import vectorize_query
 
@@ -34,6 +44,66 @@ BASE_WEIGHTS = {
 }
 
 MIN_DESCRIPTION_SIMILARITY = 0.15
+
+
+def _contains_phrase(text, phrase):
+    text_tokens = _phrase_tokens(text)
+    phrase_tokens = _phrase_tokens(phrase)
+    if not phrase_tokens:
+        return False
+    for start in range(len(text_tokens) - len(phrase_tokens) + 1):
+        if all(
+            text_tokens[start + offset] in _word_forms(word)
+            or word in _word_forms(text_tokens[start + offset])
+            for offset, word in enumerate(phrase_tokens)
+        ):
+            return True
+    return False
+
+
+@lru_cache(maxsize=32768)
+def _phrase_tokens(text):
+    normalized = unicodedata.normalize("NFKC", str(text)).casefold()
+    return tuple(re.findall(r"[^\W_]+", normalized, flags=re.UNICODE))
+
+
+@lru_cache(maxsize=4096)
+def _word_forms(word):
+    forms = {word}
+    if len(word) > 4 and word.endswith("ies"):
+        forms.add(word[:-3] + "y")
+    elif len(word) > 4 and word.endswith(("ches", "shes", "sses", "xes", "zes")):
+        forms.add(word[:-2])
+    elif len(word) > 3 and word.endswith("s"):
+        forms.add(word[:-1])
+    return forms
+
+
+def _movie_text_fields(movie):
+    fields = [
+        movie.get("title", ""), movie.get("original_title", ""),
+        movie.get("synopsis", ""), movie.get("overview", ""),
+        movie.get("tagline", ""), movie.get("certification", ""),
+        movie.get("content_rating", ""), movie.get("rating_certificate", ""),
+        movie.get("nationality", ""), movie.get("quality", ""),
+    ]
+    for key in (
+        "genres", "themes", "mood_tags", "keywords", "content_descriptors",
+        "production_countries", "origin_regions", "notable_awards", "cast", "actors",
+    ):
+        value = movie.get(key)
+        if isinstance(value, str):
+            fields.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, str):
+                    fields.append(item)
+                elif isinstance(item, dict):
+                    fields.extend(
+                        str(field_value) for field_value in item.values()
+                        if isinstance(field_value, str)
+                    )
+    return [str(value) for value in fields if value]
 
 
 def overlap_fraction(requested, actual):
@@ -83,15 +153,25 @@ def score_release_year(constraint, movie_year):
 
 def is_excluded(movie, preferences):
     """True if the movie matches any explicitly excluded catalog attribute."""
-    if any(g in movie["genres"] for g in preferences["excluded_genres"]):
-        return True
-    if any(m in movie["mood_tags"] for m in preferences["excluded_moods"]):
-        return True
-    if any(t in movie["themes"] for t in preferences["excluded_themes"]):
-        return True
+    searchable_fields = _movie_text_fields(movie)
+    exclusions = (
+        (preferences.get("excluded_genres", []), GENRE_SYNONYMS),
+        (preferences.get("excluded_moods", []), MOOD_SYNONYMS),
+        (preferences.get("excluded_themes", []), THEME_SYNONYMS),
+        (preferences.get("excluded_content_descriptors", []), CONTENT_DESCRIPTOR_SYNONYMS),
+    )
+    for tags, synonym_table in exclusions:
+        if any(
+            _contains_phrase(field, form)
+            for field in searchable_fields
+            for tag in tags
+            for form in {tag, *synonym_table.get(tag, [])}
+        ):
+            return True
     if any(
-        descriptor in movie.get("content_descriptors", [])
-        for descriptor in preferences.get("excluded_content_descriptors", [])
+        _contains_phrase(field, term)
+        for field in searchable_fields
+        for term in preferences.get("excluded_keywords", [])
     ):
         return True
     return False

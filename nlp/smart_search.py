@@ -18,6 +18,7 @@ from pathlib import Path
 from .normalize import normalize_text
 from .query import EXPLICIT_SYNTAX_TOKENS, build_structured_query
 from .runtime import WORD_NUMBERS
+from .scoring import is_excluded
 from .similarity import cosine_similarity, vector_norm
 from .tfidf import build_tfidf_model, simple_word_tokens, vectorize_query
 
@@ -77,7 +78,7 @@ def _shared_key(namespace, value):
     return f"movie-finder:{namespace}:{hashlib.sha256(encoded).hexdigest()}"
 
 SIMILAR_TO_PATTERN = re.compile(
-    r"\b(?:similar to|something like|(?:movies?|films?) like|like)\s+([a-z0-9][a-z0-9 :'&-]{1,60}?)"
+    r"\b(?:similar to|something like|more like|(?:movies?|films?) like|like)\s+([a-z0-9][a-z0-9 :'&-]{1,60}?)"
     r"(?=\s+(?:but|with|without|that|from|in|and|except)\b|$)"
 )
 
@@ -356,14 +357,20 @@ def local_understanding(raw_query):
         "negative_requirements": list(dict.fromkeys(
             preferences["excluded_genres"] + preferences["excluded_moods"]
             + preferences.get("excluded_content_descriptors", [])
+            + preferences.get("excluded_themes", [])
+            + preferences.get("excluded_keywords", [])
             + (["twist ending"] if no_twist_ending else [])
         )),
         "hard_constraints": list(dict.fromkeys(
             ([f"cast constraint: {preferences['cast_gender']}"] if preferences.get("cast_gender") else [])
             + (["release year"] if preferences.get("release_year") else [])
             + (["road trip"] if road_trip_request else [])
-            + [f"exclude {item}" for item in preferences["excluded_genres"]]
-            + [f"exclude {item}" for item in preferences.get("excluded_content_descriptors", [])]
+            + [f"exclude {item}" for item in (
+                preferences["excluded_genres"] + preferences["excluded_moods"]
+                + preferences.get("excluded_themes", [])
+                + preferences.get("excluded_content_descriptors", [])
+            )]
+            + [f"exclude keyword {item}" for item in preferences.get("excluded_keywords", [])]
             + (["ending is not a twist"] if no_twist_ending else [])
             + (["only animals"] if animal_only else [])
             + (["silent film"] if silent_request else [])
@@ -376,6 +383,11 @@ def local_understanding(raw_query):
         "verification_notes": "Catalog fields include title, synopsis, genres, keywords, year, rating, and optional TMDB credits.",
         "filters": {
             "genres": preferences["genres"],
+            "excluded_genres": preferences["excluded_genres"],
+            "excluded_moods": preferences["excluded_moods"],
+            "excluded_themes": preferences["excluded_themes"],
+            "excluded_content_descriptors": preferences.get("excluded_content_descriptors", []),
+            "excluded_keywords": preferences.get("excluded_keywords", []),
             "year_range": {"from": year.get("min"), "to": year.get("max")},
             "min_rating": None,
             "runtime": {
@@ -439,20 +451,23 @@ def _make_bm25_index(movies):
 def _get_bm25_index(movies):
     key = id(movies)
     with _BM25_LOCK:
-        index = _BM25_CACHE.get(key)
-        if index is None:
-            index = _make_bm25_index(movies)
+        cached = _BM25_CACHE.get(key)
+        if cached is not None and cached[0] is movies:
+            return cached[1]
+        index = _make_bm25_index(movies)
+        if cached is None:
             if len(_BM25_CACHE) >= 2:
                 _BM25_CACHE.pop(next(iter(_BM25_CACHE)))
-            _BM25_CACHE[key] = index
+        _BM25_CACHE[key] = (movies, index)
         return index
 
 
 def _constraint_words(understanding):
     runtime = understanding.get("filters", {}).get("runtime", {})
+    words = set(EXPLICIT_SYNTAX_TOKENS)
     if any(runtime.get(key) is not None for key in ("min", "max", "target")):
-        return EXPLICIT_SYNTAX_TOKENS | set(WORD_NUMBERS)
-    return EXPLICIT_SYNTAX_TOKENS
+        words.update(WORD_NUMBERS)
+    return words | set(simple_word_tokens(" ".join(words)))
 
 
 def _query_terms(raw_query, understanding):
@@ -465,11 +480,26 @@ def _query_terms(raw_query, understanding):
     ]
     words = simple_word_tokens(" ".join(sources))
     constraint_words = _constraint_words(understanding)
+    negative_terms = _negative_query_terms(understanding)
     return list(dict.fromkeys(
         word for word in words
-        if word not in STOP_WORDS and word not in constraint_words and len(word) > 1
+        if word not in STOP_WORDS and word not in constraint_words and word not in negative_terms and len(word) > 1
         and not re.fullmatch(r"(?:\d{2,4})s?", word)
     ))
+
+
+def _negative_query_terms(understanding):
+    phrases = [
+        *understanding.get("negative_requirements", []),
+        *understanding.get("exclusions", []),
+    ]
+    filters = understanding.get("filters", {})
+    for key in (
+        "excluded_genres", "excluded_moods", "excluded_themes",
+        "excluded_content_descriptors", "excluded_keywords",
+    ):
+        phrases.extend(filters.get(key, []))
+    return set(simple_word_tokens(" ".join(str(phrase) for phrase in phrases)))
 
 
 def _remove_negated_concepts(text):
@@ -486,9 +516,10 @@ def _raw_query_terms(raw_query):
 
 def _raw_query_terms_from_understanding(raw_query, understanding):
     constraint_words = _constraint_words(understanding)
+    negative_terms = _negative_query_terms(understanding)
     return list(dict.fromkeys(
         word for word in simple_word_tokens(_remove_negated_concepts(raw_query))
-        if word not in STOP_WORDS and word not in constraint_words and len(word) > 1
+        if word not in STOP_WORDS and word not in constraint_words and word not in negative_terms and len(word) > 1
         and not re.fullmatch(r"(?:\d{2,4})s?", word)
     ))
 
@@ -498,7 +529,13 @@ def _fuzzy_terms(terms, vocabulary):
     vocabulary = list(vocabulary)
     vocabulary_set = set(vocabulary)
     for term in set(terms):
-        if len(term) < 4 or term in vocabulary_set:
+        if (
+            len(term) < 4
+            or term in vocabulary_set
+            or term in STOP_WORDS
+            or term in EXPLICIT_SYNTAX_TOKENS
+            or re.fullmatch(r"\d+(?:\.\d+)?|\d{2,4}s?", term)
+        ):
             continue
         closest = None
         closest_ratio = 0.0
@@ -518,7 +555,13 @@ def _fuzzy_term_map(terms, vocabulary):
     vocabulary_set = set(vocabulary)
     mapping = {}
     for term in terms:
-        if term in vocabulary_set or len(term) < 4:
+        if (
+            term in vocabulary_set
+            or len(term) < 4
+            or term in STOP_WORDS
+            or term in EXPLICIT_SYNTAX_TOKENS
+            or re.fullmatch(r"\d+(?:\.\d+)?|\d{2,4}s?", term)
+        ):
             mapping[term] = term
             continue
         closest = None
@@ -587,6 +630,41 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
     """Rank candidates with local lexical similarity and title/entity hints."""
     if not movies:
         return []
+    if understanding.get("similar_to") and tfidf_model:
+        source_id = understanding.get("similar_to_movie_id")
+        if source_id is None:
+            wanted = re.sub(
+                r"[^a-z0-9]+", " ",
+                (understanding.get("similar_to") or "").casefold(),
+            ).strip()
+            source = next((
+                movie for movie in movies
+                if re.sub(r"[^a-z0-9]+", " ", movie.get("title", "").casefold()).strip() == wanted
+            ), None)
+            source_id = source.get("id") if source else None
+        source_vector = tfidf_model.get("vectors", {}).get(source_id)
+        if source_vector:
+            similar = []
+            for position, movie in enumerate(movies):
+                if movie.get("id") == source_id:
+                    continue
+                movie_vector = tfidf_model.get("vectors", {}).get(movie.get("id"), {})
+                score = cosine_similarity(
+                    source_vector,
+                    movie_vector,
+                    tfidf_model.get("norms", {}).get(source_id),
+                    tfidf_model.get("norms", {}).get(movie.get("id")),
+                )
+                if score > 0:
+                    similar.append((score, position, movie))
+            similar.sort(key=lambda item: (-item[0], item[1], str(item[2].get("id"))))
+            return [{
+                "movie": movie,
+                "search_score": score / similar[0][0] * 100,
+                "match_reason": f"TF-IDF metadata similarity to {understanding.get('similar_to')}.",
+                "relevance_score": score,
+                "fallback_only": False,
+            } for score, _, movie in similar[:limit]]
     terms = _query_terms(raw_query, understanding)
     terms = list(dict.fromkeys(terms + _similar_movie_terms(understanding, movies)))
     raw_terms = _raw_query_terms_from_understanding(raw_query, understanding)
@@ -705,6 +783,13 @@ def _basic_assessment(raw_query, candidate, understanding):
         else:
             unsatisfied.append("requested release year")
 
+    title_match_ids = {str(value) for value in understanding.get("title_match_ids", [])}
+    if title_match_ids:
+        if str(movie.get("id")) in title_match_ids:
+            satisfied.append("requested title")
+        else:
+            unsatisfied.append("requested title")
+
     genres = {normalize_text(genre) for genre in movie.get("genres", [])}
     for genre in filters.get("genres", []):
         if normalize_text(genre) in genres:
@@ -721,18 +806,35 @@ def _basic_assessment(raw_query, candidate, understanding):
         else:
             unsatisfied.append("requested runtime")
 
-    descriptors = {normalize_text(value) for value in movie.get("content_descriptors", [])}
+    exclusion_preferences = {
+        key: filters.get(key, [])
+        for key in (
+            "excluded_genres", "excluded_moods", "excluded_themes",
+            "excluded_content_descriptors", "excluded_keywords",
+        )
+    }
+    if any(exclusion_preferences.values()):
+        if is_excluded(movie, exclusion_preferences):
+            unsatisfied.append("absence of excluded metadata")
+        else:
+            satisfied.append("absence of excluded metadata")
+    structured_exclusions = {
+        normalize_text(value)
+        for values in exclusion_preferences.values()
+        for value in values
+    }
     for constraint in hard_constraints:
         normalized = normalize_text(constraint)
+        if normalized.startswith("exclude "):
+            term = normalized[len("exclude "):]
+            if term.startswith("keyword "):
+                term = term[len("keyword "):]
+            if term not in structured_exclusions:
+                unverifiable.append(f"absence of {term}")
+            continue
         if normalized == "release year" or normalized.endswith(" genre"):
             continue
-        if normalized.startswith("exclude "):
-            excluded = normalized.removeprefix("exclude ")
-            if excluded in genres or excluded in descriptors:
-                unsatisfied.append(f"absence of {excluded}")
-            else:
-                unverifiable.append(f"absence of {excluded}")
-        elif "cast constraint" in normalized:
+        if "cast constraint" in normalized:
             from .cast_verification import classify_cast_gender
             cast_status = classify_cast_gender(movie)
             if cast_status["status"] == "contradicted":
@@ -787,7 +889,12 @@ def rerank_candidates(raw_query, candidates, understanding=None):
     if not candidates:
         return candidates
     understanding = understanding or local_understanding(raw_query)
-    cache_key = ("verify", raw_query.casefold(), tuple(str(item["movie"]["id"]) for item in candidates))
+    cache_key = (
+        "verify",
+        raw_query.casefold(),
+        json.dumps(understanding, sort_keys=True, separators=(",", ":"), default=str),
+        tuple(str(item["movie"]["id"]) for item in candidates),
+    )
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached

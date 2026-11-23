@@ -58,9 +58,14 @@ GENRE_SYNONYMS = {
     "crime": ["crime", "crime drama", "crime dramas", "gangster movie", "gangster movies"],
     "adventure": ["adventure"],
     "family": ["family movie", "family movies", "kids movie", "kids movies", "family friendly", "family-friendly", "pamilya", "pelikula ng pamilya"],
-    "musical": ["musical", "musicals", "music movie", "music movies"],
-    "music": ["music movie", "music movies", "musician movie", "musician movies"],
+    "musical": ["musical", "musicals"],
+    "music": ["music", "music movie", "music movies", "musician movie", "musician movies"],
     "documentary": ["documentary", "documentaries", "docu"],
+    "biography": ["biography", "biographies", "biopic", "biopics"],
+    "history": ["history", "historical movie", "historical film"],
+    "sport": ["sport", "sports", "sports movie", "sports films"],
+    "war": ["war", "war movie", "war film"],
+    "western": ["western", "westerns", "cowboy movie", "cowboy film"],
 }
 
 THEME_SYNONYMS = {
@@ -127,4 +132,4 @@ def build_reverse_index():
     return index
 
 
-MAX_PHRASE_LENGTH = 3  # longest surface form is 3 words ("edge of your seat")
+MAX_PHRASE_LENGTH = 4  # longest surface form is 4 words ("edge of your seat")

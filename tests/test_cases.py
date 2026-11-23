@@ -28,7 +28,7 @@ TEST_CASES = [
      "input": "I want something suspenseful but not horror, preferably a mystery under two hours.",
      "expect": {
          "moods_include": ["suspenseful"], "genres_include": ["mystery"],
-         "excluded_genres_include": ["horror"], "runtime_max": 120,
+         "excluded_genres_include": ["horror"], "runtime_max": 119,
      }},
     {"id": "M2", "difficulty": "moderate", "input": "Give me a funny movie, around 100 minutes.",
      "expect": {"moods_include": ["funny"], "runtime_target": 100}},
@@ -48,7 +48,7 @@ TEST_CASES = [
      "input": "I don't want comedy or romance, just give me an intense action movie under two hours with a heist in it.",
      "expect": {
          "excluded_genres_include": ["comedy", "romance"], "genres_include": ["action"],
-         "moods_include": ["intense"], "runtime_max": 120,
+         "moods_include": ["intense"], "runtime_max": 119,
      }},
     {"id": "D3", "difficulty": "difficult",
      "input": "Nothing scary, no horror, and definitely no gore — I just want something heartwarming and family friendly, about 100 minutes.",
@@ -72,7 +72,7 @@ TEST_CASES = [
      "input": "horror movies are not what I want tonight, mystery is more like it",
      "expect": {"excluded_genres_include": ["horror"], "genres_include": ["mystery"]}},
     {"id": "V2", "difficulty": "structure", "input": "under 90 minutes, comedy, nothing else matters",
-     "expect": {"genres_include": ["comedy"], "runtime_max": 90}},
+     "expect": {"genres_include": ["comedy"], "runtime_max": 89}},
     {"id": "V3", "difficulty": "structure",
      "input": "can you recommend a film about time travel that's also funny",
      "expect": {"moods_include": ["funny"], "themes_include": ["time travel"]}},
@@ -82,7 +82,7 @@ TEST_CASES = [
      "input": "A suspenseful mystery, not horror, under 140 minutes, from after 2010.",
      "expect": {
          "moods_include": ["suspenseful"], "genres_include": ["mystery"],
-         "excluded_genres_include": ["horror"], "runtime_max": 140, "has_release_year": True,
+         "excluded_genres_include": ["horror"], "runtime_max": 139, "has_release_year": True,
      }},
 
     # ---- NEGATION-HEAVY ----
@@ -98,7 +98,7 @@ TEST_CASES = [
     # ---- TAGLISH ----
     {"id": "T1", "difficulty": "taglish",
      "input": "Gusto ko ng suspenseful na mystery movie, less than 130 minutes, walang horror.",
-     "expect": {"moods_include": ["suspenseful"], "genres_include": ["mystery"], "runtime_max": 130}},
+     "expect": {"moods_include": ["suspenseful"], "genres_include": ["mystery"], "runtime_max": 129}},
     {"id": "T2", "difficulty": "taglish", "input": "Something na funny lang, mga 90 minutes, comedy movie.",
      "expect": {"moods_include": ["funny"], "genres_include": ["comedy"], "runtime_target": 90}},
 
@@ -144,7 +144,7 @@ TEST_CASES = [
     {"id": "D7", "difficulty": "description-search", "input": "a haunted house with ghosts",
      "expect": {"themes_include": ["haunting"]}},
     {"id": "D8", "difficulty": "description-search", "input": "scarry movie no romance under 2 hour",
-     "expect": {"moods_include": ["scary"], "excluded_genres_include": ["romance"], "runtime_max": 120}},
+     "expect": {"moods_include": ["scary"], "excluded_genres_include": ["romance"], "runtime_max": 119}},
     {"id": "D9", "difficulty": "description-search", "input": "a movi about grif and healing",
      "expect": {"themes_include": ["grief"]}},
     {"id": "D10", "difficulty": "description-search", "input": "not horror i want mystery",

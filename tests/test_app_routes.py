@@ -12,11 +12,20 @@ import sqlite3
 import tempfile
 from copy import deepcopy
 from pathlib import Path
+from urllib.parse import quote
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import COUNTRY_LABELS, app, build_match_reasons, detect_nationality, movie_poster_url
+from app import (
+    COUNTRY_LABELS,
+    app,
+    build_match_reasons,
+    detect_nationality,
+    drop_constraints,
+    find_title_matches,
+    movie_poster_url,
+)
 from data.generated_movies import GENERATED_MOVIES
 from data.movies import MOVIES
 from nlp.explain import explain_match
@@ -26,6 +35,12 @@ class SearchRouteTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = app.test_client()
+        cls.search_limit_patch = patch("app.allow_search", return_value=True)
+        cls.search_limit_patch.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.search_limit_patch.stop()
 
     def test_all_available_country_names_resolve(self):
         codes = sorted({
@@ -158,6 +173,107 @@ class SearchRouteTests(unittest.TestCase):
         self.assertNotIn("Top rated", html)
         self.assertNotIn("Under 100 minutes", html)
         self.assertNotIn("90s classics", html)
+
+    def test_home_page_omits_mood_picks_and_keeps_search_controls(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertNotIn("Pick a mood", html)
+        self.assertNotIn("data-mood-query", html)
+        self.assertIn('id="q"', html)
+        self.assertIn('id="result-sort"', html)
+        self.assertIn('data-view-mode="grid"', html)
+
+    def test_hard_runtime_and_year_filters_are_not_relaxed(self):
+        movies = deepcopy(MOVIES[:3])
+        for movie in movies:
+            movie["runtime"] = 90
+            movie["release_year"] = 2020
+            movie["genres"] = ["drama"]
+        with patch("app.MOVIES", movies), patch("app.allow_search", return_value=True):
+            runtime_response = self.client.get("/?q=movies+under+30+minutes&per_page=48")
+            year_response = self.client.get("/?q=movies+after+2026&per_page=48")
+        self.assertEqual(runtime_response.status_code, 200)
+        self.assertEqual(year_response.status_code, 200)
+        self.assertNotIn(b'data-detail-title=', runtime_response.data)
+        self.assertNotIn(b'data-detail-title=', year_response.data)
+        self.assertIn(b"No close matches found", runtime_response.data)
+        self.assertIn(b"No close matches found", year_response.data)
+
+    def test_overlong_query_is_rejected_with_a_next_step(self):
+        query = "space " * 2000
+        response = self.client.get("/?q=" + quote(query))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"500 characters", response.data)
+        self.assertIn(b"shorten", response.data.lower())
+        self.assertNotIn(b'data-detail-title=', response.data)
+
+    def test_exact_and_leading_article_title_queries_return_only_the_title(self):
+        for query, expected_title in (
+            ("Get Out", "Get Out"),
+            ("the Chef", "Chef"),
+            ("warm bodies", "Warm Bodies"),
+            ("WALL E", "WALL·E"),
+            ("Amélie", "Amélie"),
+            ("the Us", "Us"),
+            ("the It", "It"),
+            ("the Lion", "Lion"),
+            ("the Twilight", "Twilight"),
+            ("the Amelie", "Amelie"),
+            ("the Amélie", "Amélie"),
+            ("Amelie under 123 minutes", "Amelie"),
+            ("The Thing under 110 minutes", "The Thing"),
+            ("The Hangover under 101 minutes", "The Hangover"),
+            ("The Matrix under 137 minutes", "The Matrix"),
+            ("The Avengers under 144 minutes", "The Avengers"),
+            ("American History X", "American History X"),
+            ("the American Beauty", "American Beauty"),
+            ("No Country for Old Men", "No Country for Old Men"),
+            ("the No Country for Old Men", "No Country for Old Men"),
+            ("Zodiac under 158 minutes", "Zodiac"),
+        ):
+            with self.subTest(query=query):
+                response = self.client.get("/?q=" + quote(query) + "&per_page=48")
+                titles = re.findall(
+                    r'data-detail-title="([^"]+)"',
+                    response.get_data(as_text=True),
+                )
+                self.assertEqual(titles, [expected_title])
+
+    def test_title_prefix_matches_partial_final_word_without_shorter_aliases(self):
+        response = self.client.get("/?q=The+Lion+K&per_page=48")
+        titles = re.findall(
+            r'data-detail-title="([^"]+)"',
+            response.get_data(as_text=True),
+        )
+        self.assertIn("The Lion King", titles)
+        self.assertNotIn("Lion", titles)
+        self.assertEqual(find_title_matches("scary movie movies", MOVIES), [])
+
+    def test_unsupported_cast_and_certification_filters_are_explained(self):
+        for query in ("movies starring a person", "movies rated PG-13"):
+            with self.subTest(query=query):
+                response = self.client.get("/?q=" + quote(query))
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(b"catalog does not include", response.data)
+                self.assertNotIn(b'data-detail-title=', response.data)
+
+    def test_dropping_runtime_chip_clears_verification_filter(self):
+        preferences = {
+            "runtime": {"min": None, "max": 100, "target": None, "tolerance": 15},
+        }
+        understanding = {
+            "filters": {
+                "runtime": {"min": None, "max": 100, "target": None},
+            },
+            "hard_constraints": [],
+        }
+        drop_constraints(preferences, understanding, ["runtime"])
+        self.assertIsNone(preferences["runtime"]["max"])
+        self.assertEqual(
+            understanding["filters"]["runtime"],
+            {"min": None, "max": None, "target": None},
+        )
 
     def test_ui_has_language_control_with_english_default_and_theme_toggle(self):
         response = self.client.get("/")

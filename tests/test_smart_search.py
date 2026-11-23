@@ -22,6 +22,7 @@ class SmartSearchTests(unittest.TestCase):
 
     def test_similar_to_title_comes_from_the_query_text(self):
         self.assertEqual(local_understanding("something like Heat but shorter")["similar_to"], "heat")
+        self.assertEqual(local_understanding("more like Heat")["similar_to"], "heat")
         self.assertIsNone(local_understanding("a funny movie")["similar_to"])
 
     def test_similar_to_expands_from_catalog_record_only_when_title_exists(self):
@@ -29,6 +30,36 @@ class SmartSearchTests(unittest.TestCase):
         self.assertEqual(_similar_movie_terms({"similar_to": "zorbo"}, catalog), ["thriller", "heist", "vault"])
         self.assertEqual(_similar_movie_terms({"similar_to": "missing title"}, catalog), [])
         self.assertEqual(_similar_movie_terms({"similar_to": None}, catalog), [])
+
+    def test_similar_to_uses_local_tfidf_and_excludes_the_source(self):
+        from nlp.tfidf import build_tfidf_model
+
+        catalog = [
+            {"id": 1, "title": "Solar Heist", "synopsis": "A crew steals a vault in space.",
+             "genres": ["thriller"], "themes": ["heist"], "mood_tags": [], "keywords": ["vault"]},
+            {"id": 2, "title": "Moon Job", "synopsis": "A crew plans a vault robbery in space.",
+             "genres": ["thriller"], "themes": ["heist"], "mood_tags": [], "keywords": ["vault"]},
+            {"id": 3, "title": "Garden Wedding", "synopsis": "A couple prepares for a wedding.",
+             "genres": ["romance"], "themes": ["true love"], "mood_tags": [], "keywords": ["wedding"]},
+        ]
+        model = build_tfidf_model(catalog)
+        understanding = {
+            "similar_to": "Solar Heist",
+            "similar_to_movie_id": 1,
+            "required_terms": [],
+            "keywords": [],
+            "expanded_concepts": [],
+            "genres": [],
+            "mood_tone": [],
+            "example_titles": [],
+        }
+
+        candidates = retrieve_candidates(
+            "more like Solar Heist", understanding, catalog, model, limit=2,
+        )
+
+        self.assertEqual([item["movie"]["id"] for item in candidates], [2])
+        self.assertIn("TF-IDF metadata similarity", candidates[0]["match_reason"])
 
     def test_decade_and_genre_are_extracted(self):
         query = local_understanding("90s comedy with a road trip")

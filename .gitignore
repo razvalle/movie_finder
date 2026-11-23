@@ -17,6 +17,8 @@ static/images/*
 !static/images/.gitkeep
 !static/images/movie-finder-logo.gif
 tests/test_report.md
+tests/.search-trials.jsonl
+tests/.search-trials-*.jsonl
 
 # Local editor and OS files
 .vscode/

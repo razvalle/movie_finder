@@ -31,6 +31,20 @@ def extract_release_year_constraint(normalized_text):
             decade += 2000 if decade < 30 else 1900  # "20s"->2020s, "90s"->1990s
         return {"min": decade, "max": decade + 9}
 
+    spelled_decades = {
+        "twenties": 1920, "thirties": 1930, "forties": 1940,
+        "fifties": 1950, "sixties": 1960, "seventies": 1970,
+        "eighties": 1980, "nineties": 1990,
+    }
+    match = re.search(
+        r"\b(?:from the |from |in )?(twenties|thirties|forties|fifties|"
+        r"sixties|seventies|eighties|nineties)\b",
+        normalized_text,
+    )
+    if match:
+        decade = spelled_decades[match.group(1)]
+        return {"min": decade, "max": decade + 9}
+
     match = re.search(r"before (\d{4})", normalized_text)
     if match:
         return {"min": None, "max": int(match.group(1)) - 1}

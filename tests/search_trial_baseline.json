@@ -1,0 +1,9 @@
+{
+  "format_version": 1,
+  "catalog_movies": 1065,
+  "trials": 4992,
+  "held_out": {
+    "recall@48": 0.9390402075226978,
+    "hard_constraint_violation_rate": 0.1572671608121173
+  }
+}

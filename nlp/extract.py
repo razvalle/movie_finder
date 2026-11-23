@@ -22,13 +22,24 @@ user text into a structured preference dict:
 from difflib import SequenceMatcher
 
 from .normalize import normalize_text
-from .tokenize import tokenize, build_ngrams, remove_stopwords
-from .negation import find_negation_scopes, is_retroactively_negated, is_within_negation_scope
+from .tokenize import STOPWORDS, tokenize, build_ngrams, remove_stopwords
+from .negation import (
+    NEGATION_CUES,
+    find_negation_scopes,
+    is_retroactively_negated,
+    is_within_negation_scope,
+)
 from .runtime import extract_runtime_constraint
 from .release_year import extract_release_year_constraint
 from data.synonyms import build_reverse_index
 
 REVERSE_INDEX = build_reverse_index()  # built once at module import
+NEGATION_SYNTAX_TOKENS = {
+    "above", "at", "below", "between", "from", "hour", "hours", "hr", "hrs",
+    "least", "less", "longer", "max", "maximum", "min", "minimum", "mins",
+    "minute", "minutes", "more", "over", "shorter", "than", "under", "within",
+}
+NEGATION_CUE_WORDS = NEGATION_CUES | {"but"}
 
 
 def fuzzy_synonym_hit(phrase):
@@ -37,7 +48,7 @@ def fuzzy_synonym_hit(phrase):
     Fuzzy matching is limited to single words and close spellings so it
     cannot turn ordinary descriptive prose into an unrelated preference.
     """
-    if " " in phrase or len(phrase) < 4:
+    if " " in phrase or len(phrase) < 4 or phrase in STOPWORDS or phrase.isdigit():
         return None
     best_key = None
     best_ratio = 0.0
@@ -59,6 +70,7 @@ def extract_preferences(raw_input):
 
     moods, genres, themes = set(), set(), set()
     excluded_moods, excluded_genres, excluded_themes = set(), set(), set()
+    excluded_keywords = set()
     content_descriptors, excluded_content_descriptors = set(), set()
 
     # Track which token indices got claimed by a category match, so we
@@ -67,7 +79,7 @@ def extract_preferences(raw_input):
     # "small town" still influence scoring even without an exact dict hit).
     claimed_indices = set()
 
-    ngrams = build_ngrams(tokens, 3)
+    ngrams = build_ngrams(tokens, 4)
     # build_ngrams already yields longest-phrase-first per position, so
     # the first successful lookup at a given index wins (greedy longest
     # match).
@@ -77,6 +89,7 @@ def extract_preferences(raw_input):
             continue  # already claimed by a longer phrase
 
         hit = REVERSE_INDEX.get(ngram["phrase"])
+        exact_hit = hit
         if not hit:
             hit = fuzzy_synonym_hit(ngram["phrase"])
         if not hit:
@@ -93,17 +106,50 @@ def extract_preferences(raw_input):
         }[hit["category"]]
 
         target_set.add(hit["tag"])
+        if negated and exact_hit is None:
+            excluded_keywords.add(ngram["phrase"])
         for k in range(start, end + 1):
             claimed_indices.add(k)
 
     runtime = extract_runtime_constraint(normalized_text)
     release_year = extract_release_year_constraint(normalized_text)
+    numeric_negation_cues = {"not", "no", "without", "except", "excluding", "avoid", "avoiding", "skip", "but"}
+    for index, token in enumerate(tokens):
+        if (
+            token.isdigit()
+            and index not in claimed_indices
+            and is_within_negation_scope(index, index, negation_scopes)
+            and index > 0
+            and tokens[index - 1] in numeric_negation_cues
+            and not (index + 1 < len(tokens) and tokens[index + 1] in {"minute", "minutes", "min", "mins", "hour", "hours", "hr", "hrs"})
+        ):
+            excluded_keywords.add(token)
+            claimed_indices.add(index)
+            if (
+                release_year
+                and release_year["min"] == int(token)
+                and release_year["max"] == int(token)
+            ):
+                release_year = None
+            continue
+        if (
+            (token not in STOPWORDS or index > 0 and tokens[index - 1] in NEGATION_CUE_WORDS)
+            and token not in NEGATION_SYNTAX_TOKENS
+            and index not in claimed_indices
+            and is_within_negation_scope(index, index, negation_scopes)
+            and not token.isdigit()
+        ):
+            excluded_keywords.add(token)
+            claimed_indices.add(index)
 
     # Leftover words feed the TF-IDF/cosine-similarity fallback so
     # descriptive free text not covered by the synonym dictionary still
     # contributes to matching (e.g. "hotel", "detective", "wedding").
     leftover_tokens = [t for i, t in enumerate(tokens) if i not in claimed_indices and t != ","]
-    free_text_keywords = remove_stopwords(leftover_tokens)
+    free_text_keywords = [
+        token for token in remove_stopwords(leftover_tokens)
+        if token not in excluded_keywords
+    ]
 
     return {
         "raw_input": raw_input,
@@ -115,6 +161,7 @@ def extract_preferences(raw_input):
         "excluded_moods": sorted(excluded_moods),
         "excluded_genres": sorted(excluded_genres),
         "excluded_themes": sorted(excluded_themes),
+        "excluded_keywords": sorted(excluded_keywords),
         "content_descriptors": sorted(content_descriptors),
         "excluded_content_descriptors": sorted(excluded_content_descriptors),
         "runtime": runtime,

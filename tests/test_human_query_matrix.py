@@ -127,6 +127,9 @@ class HumanQueryMatrixTests(unittest.TestCase):
             ranked = rank_movies(movies, preferences, self.model)
             with self.subTest(query=query):
                 if genre:
+                    if not movies:
+                        self.assertFalse(ranked["results"])
+                        continue
                     self.assertTrue(ranked["results"])
                     self.assertTrue(all(genre in entry["movie"]["genres"] for entry in ranked["results"]))
                 if query == "walang horror":

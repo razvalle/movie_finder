@@ -23,12 +23,19 @@ from .tokenize import remove_stopwords
 from .similarity import vector_norm
 
 WORD_RE = re.compile(r"[^a-z0-9\s-]")
+TOKENIZER_VERSION = 2
 
 
 def simple_word_tokens(text):
     cleaned = WORD_RE.sub(" ", text.lower())
     tokens = remove_stopwords([t for t in cleaned.split() if t])
-    return [form for token in tokens for form in word_forms(token)]
+    expanded = []
+    for token in tokens:
+        expanded.extend(word_forms(token))
+        if "-" in token:
+            for component in remove_stopwords(token.split("-")):
+                expanded.extend(word_forms(component))
+    return expanded
 
 
 def word_forms(token):
@@ -110,6 +117,7 @@ def load_or_build_tfidf_model(movies, cache_path, source_path=None):
         content_digest.update(len(document).to_bytes(8, "big"))
         content_digest.update(document)
     fingerprint = (
+        TOKENIZER_VERSION,
         len(movies),
         source_stamp,
         movies[0].get("id") if movies else None,

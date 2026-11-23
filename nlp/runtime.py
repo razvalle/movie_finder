@@ -9,12 +9,12 @@ numeric constraint dict:
     {"min": number|None, "max": number|None, "target": number|None, "tolerance": number}
 
 Supported patterns (word numbers AND digits, hours AND minutes):
-    "under two hours"             -> max = 120
-    "less than 120 minutes"       -> max = 120
+    "under two hours"             -> max = 119
+    "less than 120 minutes"       -> max = 119
     "no more than 100 minutes"    -> max = 100
     "not longer than 100 minutes" -> max = 100
     "at least two hours"          -> min = 120
-    "more than 90 minutes"        -> min = 90
+    "more than 90 minutes"        -> min = 91
     "around 90 minutes"           -> target = 90, tolerance = 15
     "about two hours"             -> target = 120, tolerance = 15
 -----------------------------------------------------------------------
@@ -84,6 +84,47 @@ def extract_runtime_constraint(normalized_text):
     (defaults to 15 minutes).
     """
     result = {"min": None, "max": None, "target": None, "tolerance": 15}
+
+    normalized_text = re.sub(
+        r"\b(\d+)h(\d{1,2})\b",
+        lambda match: (
+            f"{int(match.group(1)) * 60 + int(match.group(2))} minutes"
+            if int(match.group(2)) < 60 else match.group(0)
+        ),
+        normalized_text,
+    )
+
+    range_pattern = re.compile(
+        r"\b(?:between|from)\s+"
+        + NUM + r"\s+(?:and|to)\s+" + NUM
+        + r"\s*(hours?|minutes?|hrs?|mins?)\b"
+    )
+    range_match = range_pattern.search(normalized_text)
+    if range_match:
+        unit = range_match.group(3)
+        minimum = to_minutes(parse_number_phrase(range_match.group(1)), unit)
+        maximum = to_minutes(parse_number_phrase(range_match.group(2)), unit)
+        if minimum is not None and maximum is not None:
+            result["min"], result["max"] = sorted((minimum, maximum))
+            return result
+
+    strict_rules = [
+        ("max", re.compile(
+            r"(?:under|below|less than|shorter than)\s+"
+            + NUM + r"\s*(hours?|minutes?|hrs?|mins?)"
+        ), -1),
+        ("min", re.compile(
+            r"(?:over|(?<!no )more than|(?<!not )longer than|above)\s+"
+            + NUM + r"\s*(hours?|minutes?|hrs?|mins?)"
+        ), 1),
+    ]
+    for kind, pattern, adjustment in strict_rules:
+        match = pattern.search(normalized_text)
+        if match:
+            minutes = to_minutes(parse_number_phrase(match.group(1)), match.group(2))
+            if minutes is not None:
+                result[kind] = minutes + adjustment
+                return result
 
     for kind, pattern in RULES:
         match = pattern.search(normalized_text)

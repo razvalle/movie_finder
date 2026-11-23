@@ -114,16 +114,18 @@ unset. With a key present, explicitly running either script activates its
 documented enrichment; no code change is needed to enable it. The audit output
 and JSON report show whether a key is configured at audit time.
 
-The generated-query benchmark is a synthetic prioritization signal, not real
-user feedback. Its 100 held-out queries cover genre, decade, runtime and a
-keyword derived from the source title; they do not test cast or content
-descriptor requests. In the latest held-out run, recall@20 was 0.470, 24.9% of
-returned results missed the benchmark keyword, 1.3% of verified results broke
-any hard constraint, and 68.7% of displayed results were marked unverified.
-That supports prioritizing real plot/keyword coverage when TMDB is available.
-Runtime and year data are already present; the benchmark had zero runtime
-violations and 0.1% decade violations. It cannot justify prioritizing cast or
-content descriptors, which its query templates never ask for.
+The standalone relevance benchmark is a synthetic prioritization signal, not
+real user feedback. Its 100 queries per split cover genre, decade, runtime and
+a keyword derived from the source title; they do not test cast or content
+descriptor requests. The latest run reported recall@20 of 0.760 on the tuning
+split and 0.670 on held-out; hard-constraint violation rates were 0.1% and
+3.8%, respectively. Held-out keyword violations were 3.5%, decade violations
+0.3%, and genre violations 0.1%. This supports prioritizing better descriptive
+metadata and lexical matching, but cannot justify prioritizing cast or content
+descriptors, which its templates never ask for. Run
+`python tests/relevance_benchmark.py --split tune` for tuning metrics and
+`python tests/relevance_benchmark.py` for held-out reporting; do not tune on
+the held-out split.
 
 The audit prints these limitations and priorities, and includes them in its
 JSON report. Re-run the benchmark with `python tests/relevance_benchmark.py`
@@ -208,15 +210,110 @@ titles. Results remain labeled as closest matches when the catalog cannot verify
 all requirements. The query cache and per-client search rate limit are local to
 each app worker.
 
-The local catalog in this workspace currently loads 404,553 IMDb records from a
-gitignored `data/imdb_movies.json`: all have a `synopsis` and `keywords`, 326,138
-have a runtime, and none currently have TMDB `overview`, cast, tagline, or
-certification because `data/movie_cast_enrichment.json` is absent. The deployed
-tracked catalog is the compact popular set plus curated records; IMDb bulk data
-does not provide plot or cast metadata. Therefore requests that depend on absent
-or partial fields (for example, proving there are no women or no violence) can
-only be partial/unverified until enrichment is bundled, and some negative claims
+The catalog used by this workspace's offline trials contains 1,065 records; the
+full IMDb import (`data/imdb_movies.json`) is not installed here. The compact
+catalog has title, year, genre, runtime, rating, and vote metadata, but no
+bundled TMDB cast or certification enrichment. IMDb bulk data does not provide
+plot or cast metadata. Therefore requests that depend on absent or partial
+fields (for example, proving there are no women or no violence) can only be
+partial or unverified until enrichment is bundled, and some negative claims
 remain impossible to prove even with top-billed cast enrichment.
+
+### Offline generated-search trial harness
+
+Run the end-to-end harness from the project root:
+
+```powershell
+python tests/search_trial_harness.py --output tests/.search-trials-final.jsonl
+```
+
+It generates catalog-derived title, description, filter, negation, synonym,
+typo, language-mix, number, similarity, and surprising-input trials; computes
+expected matches by direct catalog scans; and exercises the real Flask route
+with the rule-based pipeline. It removes `OPENAI_API_KEY` and blocks socket
+connections during each request. The JSONL output records each query,
+preferences, stage counts, results, explanations, latency, and failures. The
+deterministic split is preserved when parameters change; ambiguous generated
+title fragments that conflict with an exact title after removing a leading
+article are excluded from the fragment set.
+
+Latest run: 5,018 trials over the 1,065-record compact catalog: 4,058 tuning
+trials passed (100%); 957/960 held-out trials passed (99.69%). The pre-fix
+baseline was 4,992 trials, with 90.27% tuning and 88.57% held-out pass rates.
+Because the generator was corrected to avoid ambiguous title-oracle collisions,
+the populations are not an exact paired comparison. The held-out baseline
+guard passed: recall@48 improved from 93.90% to 99.74%, and the hard-constraint
+violation rate fell from 15.73% to 0.64%. No code was tuned from held-out
+examples. The command returned a nonzero exit code because the three held-out
+trials below remain failures, even though the baseline guard passed.
+
+| Metric | Tuning | Held-out | Overall |
+| --- | ---: | ---: | ---: |
+| Recall@48 | 100.00% | 99.74% | 99.95% |
+| Hard-constraint violation rate | 0.00% | 0.64% | 0.12% |
+| Empty-result rate | 1.80% | 1.88% | 1.81% |
+| False-exact rate | 0.00% | 0.86% | 0.16% |
+| Crashes / HTTP 5xx | 0 / 0 | 0 / 0 | 0 / 0 |
+| Latency p95 / p99 | 0.391 / 0.783 s | 0.345 / 0.702 s | 0.371 / 0.759 s |
+
+Pagination passed: pages were disjoint, covered the complete result set, and
+invalid or out-of-range page numbers fell back safely. Empty responses had a
+visible explanation or next step. The tuning split had no hard-constraint or
+false-exact violations; the nonzero held-out rates mean the strict zero-
+violation target is not yet met. The three held-out failures were not used for
+tuning:
+
+| Held-out query | Oracle expected | Actual | Failure stages |
+| --- | --- | --- | --- |
+| `the Suicide Squad` | movie ID `202` | movie ID `421` | hard filter, recall, false exact |
+| `Get Out under 105 minutes` | movie ID `9` | expected title absent from the returned page | hard filter, recall, false exact |
+| `romcom movies` | 20 catalog IDs | Toy Story, ID `18` | hard filter |
+
+The JSONL log contains the full expected and returned IDs, preferences, and
+stage details. Do not tune against these held-out cases.
+
+Root causes fixed on the tuning set:
+
+- Parser context had treated descriptive country mentions and some ranking,
+  person, or negated phrases as active filters; country/ranking/person
+  interpretation and numeric/fuzzy negation handling were tightened in
+  `nlp/query.py` and `nlp/extract.py`.
+- Exclusions could be checked against concatenated metadata or miss normalized
+  and synonym forms. Verification is now field-local and Unicode-normalized in
+  `nlp/scoring.py`; excluded/runtime syntax is removed from retrieval terms in
+  `nlp/smart_search.py`.
+- Hyphenated metadata terms and stale tokenizer caches caused lexical recall
+  gaps. The tokenizer now indexes word components and includes its version in
+  the TF-IDF cache fingerprint in `nlp/tfidf.py`.
+- Leading-article and title-plus-filter queries could resolve to a prefix or
+  sequel rather than the exact catalog title. Exact title checks now precede
+  prefixes; structured suffixes are recognized while preserving hard filters.
+  The ten tuning title/title-plus-runtime failures fell to zero.
+- BM25 cache entries keyed only by Python list IDs could reuse a stale index
+  after list identity reuse. The cache now validates and retains the source
+  list; a focused regression reproduces the collision.
+- Filter-combination trials with the same blank query reused one trial ID,
+  making stability comparisons invalid. IDs now include request parameters
+  while the split remains unchanged; the repeated-request determinism check
+  passes.
+- The legacy examples treated “under N minutes” as inclusive. Their expected
+  maximums now reflect the strict `< N` runtime rule; the legacy runner passes
+  51/51 without changing runtime behavior.
+
+Trial counts by category: title 3,188; combined constraints 296; descriptions
+292; negation 241; synonyms 241; typos 141; runtime-number forms 110; title
+fragments 94; filter combinations 80; negation-keyword 60; country 44; single
+year 69; single genre 20; surprising inputs 16; single runtime 12; similar-to
+100; decade-number forms 3; language-mix 5; recognition-chip 4; unsupported
+cast 1; unsupported certification 1. Counts are deterministic for the current
+catalog and harness version.
+
+The pass rate is not a guarantee for every possible query. This harness repeats
+selected requests in one process; it does not certify cross-worker consistency
+or the deployed Render build. The compact catalog lacks cast and certification
+coverage, and its synopsis/keyword fields cannot answer every plot-specific or
+negative-content request. Such limitations must be explained in the response
+rather than presented as verified matches.
 
 ### Environment and deployment
 

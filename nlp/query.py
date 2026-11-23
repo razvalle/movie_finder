@@ -11,7 +11,9 @@ from difflib import SequenceMatcher
 import pycountry
 
 from .extract import extract_preferences
+from .negation import find_negation_scopes, is_within_negation_scope
 from .normalize import normalize_text
+from .tokenize import tokenize
 
 RANKING_PATTERNS = {
     "best": ("best", "top", "good", "great", "highest rated", "highly rated", "greatest"),
@@ -48,6 +50,41 @@ COUNTRY_ALIASES = {
 SHORT_COUNTRY_ALIASES = {"ph", "us", "uk", "jp", "jpn", "sk", "kr", "uae"}
 
 
+def _phrase_is_negated(text, phrase):
+    tokens = tokenize(text)
+    phrase_tokens = tokenize(phrase)
+    if not phrase_tokens:
+        return False
+    scopes = find_negation_scopes(tokens)
+    return any(
+        tokens[start:start + len(phrase_tokens)] == phrase_tokens
+        and is_within_negation_scope(start, start + len(phrase_tokens) - 1, scopes)
+        for start in range(len(tokens) - len(phrase_tokens) + 1)
+    )
+
+
+def _phrase_is_descriptive(text, phrase):
+    tokens = tokenize(text)
+    phrase_tokens = tokenize(phrase)
+    if not phrase_tokens:
+        return False
+    for start in range(len(tokens) - len(phrase_tokens) + 1):
+        if tokens[start:start + len(phrase_tokens)] != phrase_tokens:
+            continue
+        prior = tokens[:start]
+        about_index = max(
+            (index for index, token in enumerate(prior) if token in {"about", "regarding"}),
+            default=-1,
+        )
+        location_index = max(
+            (index for index, token in enumerate(prior) if token in {"from", "in", "made", "produced", "country"}),
+            default=-1,
+        )
+        if about_index > location_index:
+            return True
+    return False
+
+
 def country_labels():
     labels = {country.alpha_2: country.name for country in pycountry.countries}
     labels.update({"CV": "Cabo Verde", "XK": "Kosovo", "SU": "Soviet Union"})
@@ -72,7 +109,11 @@ def detect_country(normalized_text):
     for phrase, code in sorted(COUNTRY_PHRASES.items(), key=lambda item: len(item[0]), reverse=True):
         if re.search(rf"\b(?:movies?|films?)\s+in\s+{re.escape(phrase)}\b", normalized_text):
             continue
-        if re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", normalized_text):
+        if (
+            re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", normalized_text)
+            and not _phrase_is_negated(normalized_text, phrase)
+            and not _phrase_is_descriptive(normalized_text, phrase)
+        ):
             return code, phrase
     for phrase, code in sorted(COUNTRY_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
         if phrase in SHORT_COUNTRY_ALIASES and not re.search(
@@ -82,7 +123,11 @@ def detect_country(normalized_text):
             continue
         if re.search(rf"\b(?:movies?|films?)\s+in\s+{re.escape(phrase)}\b", normalized_text):
             continue
-        if re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", normalized_text):
+        if (
+            re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", normalized_text)
+            and not _phrase_is_negated(normalized_text, phrase)
+            and not _phrase_is_descriptive(normalized_text, phrase)
+        ):
             return code, phrase
     for phrase, code in sorted(COUNTRY_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
         if len(phrase) < 5 or " " in phrase:
@@ -92,7 +137,11 @@ def detect_country(normalized_text):
         if re.search(rf"\b(?:movies?|films?)\s+in\s+{re.escape(phrase)}\b", normalized_text):
             continue
         for token in normalized_text.split():
-            if SequenceMatcher(None, token, phrase).ratio() >= 0.88:
+            if (
+                SequenceMatcher(None, token, phrase).ratio() >= 0.88
+                and not _phrase_is_negated(normalized_text, token)
+                and not _phrase_is_descriptive(normalized_text, token)
+            ):
                 return code, token
     return "", ""
 
@@ -100,6 +149,8 @@ def detect_country(normalized_text):
 def detect_ranking_intent(normalized_text):
     for intent, phrases in RANKING_PATTERNS.items():
         for phrase in phrases:
+            if phrase == "good" and re.search(r"\bfeel[- ]good\b", normalized_text):
+                continue
             if re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", normalized_text):
                 return intent, phrase
     return "", ""
@@ -108,7 +159,11 @@ def detect_ranking_intent(normalized_text):
 def detect_people_and_language(normalized_text):
     """Extract requested people/language text without inventing unavailable metadata."""
     people = []
-    for pattern in (r"(?:starring|actor|actress|directed by|director|written by|writer)\s+([a-z][a-z .'-]+)",):
+    patterns = (
+        r"\b(?:starring|directed by|written by)\s+([a-z][a-z .'-]+)",
+        r"\b(?:actor|actress|director|writer)\s+([a-z][a-z'-]+(?:\s+[a-z][a-z'-]+)+)",
+    )
+    for pattern in patterns:
         match = re.search(pattern, normalized_text)
         if match:
             people.append(match.group(1).strip())
@@ -168,7 +223,7 @@ def build_structured_query(raw_query, content_text=None):
     # A rom-com is explicitly both romance and comedy, not merely romance.
     if re.search(r"\b(?:romcom|rom-com|rom com)\b", normalized):
         preferences["genres"] = sorted(set(preferences["genres"]) | {"romance", "comedy"})
-    if re.search(r"\b(?:funny|hilarious|comedic|comedy)\b", normalized):
+    if re.search(r"\b(?:funny|hilarious|comedic|comedy|nakakatawa(?:ng)?)\b", normalized):
         preferences["genres"] = sorted(set(preferences["genres"]) | {"comedy"})
     if re.search(r"\b(?:romantic|love story)\b", normalized):
         preferences["genres"] = sorted(set(preferences["genres"]) | {"romance"})
@@ -181,6 +236,12 @@ def build_structured_query(raw_query, content_text=None):
         preferences["genres"] = sorted(set(preferences["genres"]) | {"horror"})
 
     people, languages = detect_people_and_language(normalized)
+    certification_match = re.search(
+        r"\b(?:rated|rating|certification|certificate)\s+"
+        r"(pg-?13|nc-?17|g|pg|r)\b",
+        normalized,
+    )
+    certifications = [certification_match.group(1)] if certification_match else []
     return {
         "raw_query": raw_query,
         "normalized_query": normalized,
@@ -196,6 +257,7 @@ def build_structured_query(raw_query, content_text=None):
         "unsupported_filters": {
             "people": people,
             "languages": languages,
+            "certifications": certifications,
         },
         "debug": {
             "country": country,
