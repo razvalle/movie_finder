@@ -1,31 +1,80 @@
-"""Flask route regression checks for human search interactions.
+"""Route checks for the minimal movie display controls.
 
 Run from the project root:
     python tests/test_app_routes.py
-    python -m unittest tests.test_app_routes.SearchRouteTests.test_search_benchmark_expected_top_results
 """
 
 import sys
-import unittest
 import re
 import sqlite3
 import tempfile
-from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
+import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import COUNTRY_LABELS, app, build_match_reasons, detect_nationality, movie_poster_url
 from data.generated_movies import GENERATED_MOVIES
 from data.movies import MOVIES
-from nlp.explain import explain_match
 
 
-class SearchRouteTests(unittest.TestCase):
+class MinimalPageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = app.test_client()
+
+    def test_home_page_contains_only_sort_and_layout_controls(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+
+        html = response.get_data(as_text=True)
+        self.assertIn('id="result-sort"', html)
+        self.assertIn('aria-label="Sort movies"', html)
+        self.assertIn('data-view-mode="grid"', html)
+        self.assertIn('data-view-mode="list"', html)
+        self.assertEqual(html.count("data-view-mode="), 2)
+        self.assertIn("Best match", html)
+        self.assertIn("Most popular", html)
+        self.assertIn("Highest rated", html)
+        self.assertIn("Newest", html)
+
+        for removed_ui in (
+            "movie-card",
+            "search__form",
+            "data-mood-query",
+            "data-open-help",
+            "data-open-about",
+            "movie-drawer",
+            "catalog-shelves",
+        ):
+            self.assertNotIn(removed_ui, html)
+
+    def test_search_and_filter_urls_still_render_only_the_minimal_page(self):
+        urls = (
+            "/?q=mystery+without+horror",
+            "/?genre=comedy&awards=winners",
+            "/?debug=1",
+        )
+        for url in urls:
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(b'id="result-sort"', response.data)
+                self.assertNotIn(b"movie-card", response.data)
+
+    def test_minimal_styles_and_controls_script_are_served(self):
+        css = self.client.get("/static/css/style.css")
+        script = self.client.get("/static/js/minimal-controls.js")
+        try:
+            self.assertEqual(css.status_code, 200)
+            self.assertIn(b".view-toggle", css.data)
+            self.assertEqual(script.status_code, 200)
+            self.assertIn(b"aria-pressed", script.data)
+            self.assertIn(b"data-view-mode", script.data)
+        finally:
+            css.close()
+            script.close()
 
     def test_all_available_country_names_resolve(self):
         codes = sorted({
@@ -40,214 +89,6 @@ class SearchRouteTests(unittest.TestCase):
             if detect_nationality(f"movies from {COUNTRY_LABELS[code]}") != code
         ]
         self.assertEqual(failures, [])
-
-    def test_explicit_genre_filter_overrides_title_query(self):
-        response = self.client.get(
-            "/?q=recommend+the+grand+budapest+hotel&genre=action&nationality=CA&per_page=12"
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b'data-selected-genre="action"', response.data)
-        self.assertNotIn(b"The Grand Budapest Hotel", response.data)
-
-    def test_country_overrides_stale_origin(self):
-        response = self.client.get("/?q=movies+from+cabo+verde&nationality=IN&per_page=12&debug=1")
-        self.assertEqual(response.status_code, 200)
-        self.assertNotIn(b'id="nationality"', response.data)
-        self.assertIn(b"Detected country</dt><dd>Cabo Verde", response.data)
-
-    def test_explicit_genre_filter_overrides_query_genre(self):
-        response = self.client.get("/?q=japanese+horror+movies&genre=action&per_page=12")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"The selected genre filter overrides", response.data)
-        self.assertIn(b'data-selected-genre="action"', response.data)
-
-    def test_country_genre_and_human_input_routes(self):
-        cases = [
-            ("/?q=japanese+horror+movies&genre=action&nationality=IN&per_page=12&debug=1", b"Detected country</dt><dd>Japan"),
-            ("/?q=a+detective+solving+a+murder+in+a+mansion&per_page=12", b"Recommended Movies"),
-            ("/?q=scarry+rom+com+but+no+sad+ending+under+two+hours&per_page=12", b"Recommended Movies"),
-            ("/?q=recommend+a+canadian+movie+called+incendies&per_page=12", b"Incendies"),
-            ("/?q=zzzzunknownword&per_page=12", b"No close matches found"),
-        ]
-        for url, marker in cases:
-            with self.subTest(url=url):
-                response = self.client.get(url)
-                self.assertEqual(response.status_code, 200)
-                self.assertIn(marker, response.data)
-
-    def test_debug_panel_shows_structured_interpretation(self):
-        response = self.client.get(
-            "/?q=whats+the+best+ph+horror+movies+from+2020&debug=1&per_page=12"
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Query Debug", response.data)
-        self.assertIn(b"what is the best philippines horror movies from 2020", response.data)
-        self.assertIn(b"Philippines", response.data)
-        self.assertIn(b"Detected intent</dt><dd>best", response.data)
-
-    def test_query_year_is_applied_before_results_are_rendered(self):
-        response = self.client.get("/?q=movies+from+2015+to+2020&per_page=48")
-        self.assertEqual(response.status_code, 200)
-        years = [int(value) for value in re.findall(rb"\xc2\xb7 (\d{4})</div>", response.data)]
-        self.assertTrue(years)
-        self.assertTrue(all(2015 <= year <= 2020 for year in years))
-
-    def test_debug_panel_shows_negative_filters(self):
-        response = self.client.get("/?q=filipino+horror+movies+without+comedy&debug=1")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Negative filters", response.data)
-        self.assertIn(b"Comedy", response.data)
-
-    def test_award_filter_shows_recognized_movies(self):
-        response = self.client.get("/?awards=winners&per_page=12")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b'value="winners" selected', response.data)
-        self.assertIn(b"Academy Award", response.data)
-        self.assertNotIn(b"Story 0009", response.data)
-
-    def test_genre_and_recognition_filters_combine_and_rating_is_card_metadata(self):
-        movies = [
-            {
-                "id": 999991, "title": "English Film", "synopsis": "English record.",
-                "genres": ["drama"], "runtime": 90, "release_year": 2020,
-                "themes": [], "mood_tags": [], "keywords": [], "content_descriptors": [],
-                "original_language": "en", "certification": "PG", "average_rating": 7.0,
-                "vote_count": 100, "notable_awards": ["Award"], "origin_regions": ["US"], "nationality": "US",
-                "production_countries": ["US"], "poster_path": "/english.jpg",
-            },
-            {
-                "id": 999992, "title": "Spanish Film", "synopsis": "Spanish record.",
-                "genres": ["drama"], "runtime": 90, "release_year": 2020,
-                "themes": [], "mood_tags": [], "keywords": [], "content_descriptors": [],
-                "original_language": "es", "certification": "R", "average_rating": 7.0,
-                "vote_count": 100, "notable_awards": ["Award"], "origin_regions": ["ES"], "nationality": "ES",
-                "production_countries": ["GB"], "poster_path": "/spanish.jpg",
-            },
-            {
-                "id": 999993, "title": "Spanish Action Film", "synopsis": "Spanish action record.",
-                "genres": ["action"], "runtime": 90, "release_year": 2020,
-                "themes": [], "mood_tags": [], "keywords": [], "content_descriptors": [],
-                "original_language": "es", "certification": "R", "average_rating": 7.0,
-                "vote_count": 100, "notable_awards": ["Award"], "origin_regions": ["ES"], "nationality": "ES",
-            },
-        ]
-        with patch("app.MOVIES", movies):
-            response = self.client.get("/?genre=drama&awards=winners&per_page=12")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"English Film", response.data)
-        self.assertIn(b"Spanish Film", response.data)
-        self.assertNotIn(b"Spanish Action Film", response.data)
-        self.assertIn(b"Age rating", response.data)
-        self.assertIn(b"<span class=\"movie-age-rating__value\">R</span>", response.data)
-        self.assertIn(b"United Kingdom", response.data)
-        self.assertIn(b"https://image.tmdb.org/t/p/w342/spanish.jpg", response.data)
-
-    def test_home_page_does_not_render_match_count_without_a_search(self):
-        response = self.client.get("/")
-        self.assertEqual(response.status_code, 200)
-        html = response.get_data(as_text=True)
-        self.assertNotIn('data-result-count=', html)
-        self.assertIn(f'Showing 1-12 of {len(MOVIES)}', html)
-        self.assertIn('All Movies', html)
-
-    def test_ui_has_language_control_with_english_default_and_theme_toggle(self):
-        response = self.client.get("/")
-        self.assertEqual(response.status_code, 200)
-        html = response.get_data(as_text=True)
-        self.assertIn('<a class="site-header__home" href="/" aria-label="Movie Finder home">', html)
-        self.assertIn('id="ui-language"', html)
-        self.assertIn('data-clear-filters', html)
-        self.assertIn('id="genre-menu-search"', html)
-        self.assertIn('id="recent-searches"', html)
-        self.assertIn('id="result-sort"', html)
-        self.assertNotIn('data-result-count=', html)
-        self.assertIn('<option value="en" lang="en" selected>English</option>', html)
-        self.assertIn('<option value="es" lang="es">Español</option>', html)
-        self.assertIn('<option value="tl" lang="tl">Tagalog</option>', html)
-        self.assertIn('<option value="fr" lang="fr">Français</option>', html)
-        self.assertIn('<option value="de" lang="de">Deutsch</option>', html)
-        self.assertIn('<option value="pt" lang="pt">Português</option>', html)
-        self.assertIn('<option value="ja" lang="ja">日本語</option>', html)
-        self.assertIn('<option value="ko" lang="ko">한국어</option>', html)
-        self.assertIn('<option value="zh" lang="zh">中文</option>', html)
-        self.assertNotIn('filter-add-button', html)
-        self.assertNotIn('active-filter-chips', html)
-        self.assertIn('id="theme-toggle"', html)
-
-    def test_selected_genres_render_as_removable_chips(self):
-        response = self.client.get("/?genre=comedy&genre=drama")
-        self.assertEqual(response.status_code, 200)
-        html = response.get_data(as_text=True)
-        self.assertIn('class="search__entry"', html)
-        self.assertIn('data-genre-chips', html)
-        self.assertIn('data-genre-menu', html)
-        self.assertIn('data-add-genre="action"', html)
-        self.assertIn('data-selected-genre="comedy"', html)
-        self.assertIn('data-selected-genre="drama"', html)
-        self.assertIn('type="hidden" name="genre" value="comedy"', html)
-        self.assertIn('type="hidden" name="genre" value="drama"', html)
-        self.assertIn('data-remove-genre="comedy"', html)
-        self.assertIn('data-remove-genre="drama"', html)
-        self.assertIn('data-add-genre="comedy"', html)
-        self.assertIn('data-add-genre="drama"', html)
-        self.assertIn('aria-label="Remove Comedy genre"', html)
-        self.assertIn('aria-label="Remove Drama genre"', html)
-
-    def test_age_rating_never_filters_and_only_appears_per_movie(self):
-        movies = [
-            {
-                "id": 999994, "title": "PG Film", "synopsis": "PG record.", "genres": ["drama"],
-                "runtime": 90, "release_year": 2020, "themes": [], "mood_tags": [], "keywords": [],
-                "content_descriptors": [], "certification": "PG", "notable_awards": [],
-                "origin_regions": [], "average_rating": 7.0, "vote_count": 100,
-            },
-            {
-                "id": 999995, "title": "R Film", "synopsis": "R record.", "genres": ["drama"],
-                "runtime": 90, "release_year": 2020, "themes": [], "mood_tags": [], "keywords": [],
-                "content_descriptors": [], "certification": "R", "notable_awards": [],
-                "origin_regions": [], "average_rating": 7.0, "vote_count": 100,
-            },
-        ]
-        with patch("app.MOVIES", movies):
-            response = self.client.get("/?age_rating=R")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"PG Film", response.data)
-        self.assertIn(b"R Film", response.data)
-        self.assertIn(b'<span class="movie-age-rating__value">PG</span>', response.data)
-        self.assertIn(b'<span class="movie-age-rating__value">R</span>', response.data)
-        self.assertNotIn(b'name="age_rating"', response.data)
-
-    def test_release_regions_are_not_displayed_as_movie_origin(self):
-        movie = {
-            "id": 999996, "title": "Origin Unknown", "synopsis": "A drama.", "genres": ["drama"],
-            "runtime": 90, "release_year": 2020, "themes": [], "mood_tags": [], "keywords": [],
-            "content_descriptors": [], "origin_regions": ["AE"], "nationality": "AE",
-            "notable_awards": [], "average_rating": 7.0, "vote_count": 100,
-        }
-        with patch("app.MOVIES", [movie]):
-            response = self.client.get("/")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Origin unavailable", response.data)
-        self.assertNotIn(b"United Arab Emirates", response.data)
-
-    def test_imported_original_title_is_shown_only_when_distinct(self):
-        movie = {
-            "id": 999997, "title": "Display Title", "original_title": "Titre d'origine",
-            "synopsis": "A drama.", "genres": ["drama"], "runtime": 90,
-            "release_year": 2020, "themes": [], "mood_tags": [], "keywords": [],
-            "content_descriptors": [], "notable_awards": [], "origin_regions": [],
-            "average_rating": 7.0, "vote_count": 100,
-        }
-        with patch("app.MOVIES", [movie]):
-            response = self.client.get("/")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Original title", response.data)
-        self.assertIn(b"Titre d&#39;origine", response.data)
-
-        movie["original_title"] = movie["title"]
-        with patch("app.MOVIES", [movie]):
-            response = self.client.get("/")
-        self.assertNotIn(b"Original title", response.data)
 
     def test_commons_poster_url_is_movie_specific_and_host_allowlisted(self):
         commons_url = "https://commons.wikimedia.org/wiki/Special:FilePath/Film_Poster.jpg"
@@ -288,31 +129,6 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn("Matched: keyword detective", reason_text)
         self.assertIn("Cast evidence supports your request", reason_text)
 
-    def test_search_benchmark_expected_top_results(self):
-        cases = [
-            ("The Ring", "The Ring"),
-            ("Dunkirk", "Dunkirk"),
-            ("recommend a canadian movie called Incendies", "Incendies"),
-        ]
-        for query, expected_title in cases:
-            with self.subTest(query=query):
-                response = self.client.get("/", query_string={"q": query, "per_page": 12})
-                self.assertEqual(response.status_code, 200)
-                titles = re.findall(rb'<h3 class="movie-card__title">(.*?)</h3>', response.data)
-                self.assertTrue(titles)
-                self.assertEqual(titles[0].decode("utf-8"), expected_title)
-
-    def test_missing_posters_render_fixed_fallback_asset(self):
-        movie = deepcopy(MOVIES[0])
-        movie["id"] = 99999991
-        movie.pop("poster_url", None)
-        movie.pop("poster_path", None)
-        with patch("app.MOVIES", [movie]):
-            response = self.client.get("/")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b'src="/static/poster-placeholder.svg"', response.data)
-        self.assertIn(b'data-poster-fallback="/static/poster-placeholder.svg"', response.data)
-
     def test_feedback_submission_is_persisted_without_changing_search(self):
         movie = MOVIES[0]
         with tempfile.TemporaryDirectory() as directory:
@@ -334,78 +150,6 @@ class SearchRouteTests(unittest.TestCase):
                 connection.close()
         self.assertEqual(row[:4], ("mystery without horror", movie["id"], movie["title"], 0))
         self.assertTrue(row[4].endswith("+00:00"))
-
-    def test_language_query_is_ignored_in_english_only_interface(self):
-        response = self.client.get("/?language=es")
-        self.assertEqual(response.status_code, 200)
-        self.assertNotIn(b"catalog doesn&#39;t include language details yet", response.data)
-        self.assertNotIn(b'name="language"', response.data)
-        self.assertNotIn(b"Missing or unverified", response.data)
-        self.assertIn(b"All Movies", response.data)
-
-    def test_negated_query_does_not_match_on_generic_title_words(self):
-        response = self.client.get("/?q=a+movie+where+there+is+no+woman&per_page=12")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"We couldn&#39;t find a movie that exactly matches your request", response.data)
-        self.assertIn(b"30 closest matches", response.data)
-        self.assertIn(b"Unverified", response.data)
-        self.assertIn(b"MOVIE_FINDER_GROUP4", response.data)
-        self.assertNotIn(b"Where There Is Life", response.data)
-        self.assertNotIn(b"There Will Be Blood", response.data)
-        self.assertNotIn(b"There's Something About Mary", response.data)
-        self.assertNotIn(b"Related to there", response.data)
-
-    def test_no_women_query_shows_conflicting_alternative_when_none_pass(self):
-        movie = {
-            "id": 999999,
-            "title": "Contradicted Film",
-            "synopsis": "A woman leads a family through danger.",
-            "genres": ["drama"],
-            "runtime": 100,
-            "release_year": 2020,
-            "themes": [],
-            "mood_tags": [],
-            "keywords": ["family"],
-            "content_descriptors": [],
-            "average_rating": 7.0,
-            "vote_count": 1000,
-            "notable_awards": [],
-            "origin_regions": [],
-        }
-        with patch("app.MOVIES", [movie]):
-            response = self.client.get("/?q=a+movie+where+there+is+no+woman&per_page=12")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"0 closest matches", response.data)
-        self.assertNotIn(b"Contradicted Film", response.data)
-
-    def test_female_lead_query_renders_positive_cast_evidence(self):
-        movie = {
-            "id": 999998,
-            "title": "The Lead",
-            "synopsis": "A detective investigates a theft.",
-            "genres": ["drama"],
-            "runtime": 100,
-            "release_year": 2020,
-            "themes": [],
-            "mood_tags": [],
-            "keywords": ["detective"],
-            "content_descriptors": [],
-            "average_rating": 7.0,
-            "vote_count": 1000,
-            "notable_awards": [],
-            "origin_regions": [],
-            "cast": [
-                {"name": "Avery", "character": "Lead", "gender": 1},
-                {"name": "Blake", "character": "Detective", "gender": 2},
-                {"name": "Casey", "character": "Witness", "gender": 2},
-            ],
-        }
-        with patch("app.MOVIES", [movie]):
-            response = self.client.get("/?q=a+movie+with+a+female+lead&per_page=12")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"The Lead", response.data)
-        self.assertIn(b"Evidence found", response.data)
-        self.assertNotIn(b"Contradicted</strong>", response.data)
 
     def test_popular_fallback_contains_real_high_vote_titles(self):
         self.assertEqual(len(GENERATED_MOVIES), 1000)
