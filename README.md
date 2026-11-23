@@ -1,10 +1,23 @@
-# Movie Finder (Python / Flask)
+# Movie Finder by Mood and Description (Python / Flask)
 
-Movie Finder is a Python 3 / Flask application. Its current page intentionally
-shows only the sort selector and grid/list controls; it does not display movie
-cards or provide a list for those controls to change. The movie catalog and
-search/ranking code remain in the project but are not exposed by this minimal
-page.
+Movie Finder is a Python 3 / Flask application using Jinja templates,
+plain HTML forms, and a small browser-side JavaScript enhancement. Search
+and ranking run on the server. The NLP stack combines local structured
+parsing, BM25/TF-IDF lexical retrieval, fuzzy and title matching, weighted
+scoring, and rule-based candidate assessment. Search requires no AI model or API key.
+
+```
+"I want something suspenseful but not horror, preferably a mystery under two hours."
+```
+```
+Detected: Mood: Suspenseful · Genre: Mystery · Exclude: Horror · Runtime: <120 min
+
+1. Arrival — 80% Match
+   ✓ Mystery genre matched
+   ✓ Suspenseful mood matched
+   ✓ Runtime is 116 minutes (under your 120-minute limit)
+   ✓ No horror tag detected
+```
 
 ## Running it (VS Code)
 
@@ -18,7 +31,7 @@ page.
    # macOS/Linux:
    source .venv/bin/activate
    ```
-3. Install the app dependencies:
+3. Install the one dependency:
    ```
    pip install -r requirements.txt
    ```
@@ -394,12 +407,11 @@ has been imported.
 ```
 movie-finder-py/
 ├── app.py                     Flask entry point — the only file that touches HTTP/rendering
-├── requirements.txt           Python app dependencies
+├── requirements.txt           One dependency: Flask
 ├── templates/
-│   └── index.html             Minimal sort and layout controls
+│   └── index.html             Jinja2 template (server-rendered, zero client JS)
 ├── static/
-│   ├── css/style.css          Minimal control styling
-│   └── js/minimal-controls.js Grid/list selection state
+│   └── css/style.css          Visual design (all styling lives here)
 ├── data/
 │   ├── movies.py               The movie dataset (edit/expand here)
 │   └── synonyms.py             Editable synonym dictionary
@@ -430,8 +442,8 @@ Every module is independently editable, per the project brief:
 | How runtime phrases are parsed   | `nlp/runtime.py`                    |
 | Scoring weights                  | `nlp/scoring.py` (`BASE_WEIGHTS`)   |
 | What reasons get displayed       | `nlp/explain.py`                    |
-| Control styling                  | `static/css/style.css`              |
-| Visible page controls            | `templates/index.html`              |
+| Look and feel                    | `static/css/style.css`              |
+| Page layout / what's shown       | `templates/index.html`, `app.py`    |
 
 ### Adding movie posters
 

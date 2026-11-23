@@ -1,30 +1,648 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#081a2b" />
-  <title>Movie Finder</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Movie Finder — by Mood &amp; Description</title>
+<link rel="icon" href="{{ url_for('static', filename='images/movie-finder-logo.gif') }}" type="image/gif" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v='visual-layer-4') }}" />
 </head>
 <body>
-  <main class="toolbar" aria-label="Movie display controls">
-    <label class="sr-only" for="result-sort">Sort movies</label>
-    <select id="result-sort" aria-label="Sort movies">
-      <option value="match">Best match</option>
-      <option value="popular">Most popular</option>
-      <option value="rating">Highest rated</option>
-      <option value="newest">Newest</option>
-    </select>
-    <div class="view-toggle" role="group" aria-label="Movie layout">
-      <button type="button" data-view-mode="grid" aria-label="Grid view" aria-pressed="true" title="Grid view">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 1h6v6H1zM9 1h6v6H9zM1 9h6v6H1zM9 9h6v6H9z"/></svg>
-      </button>
-      <button type="button" data-view-mode="list" aria-label="List view" aria-pressed="false" title="List view">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3h10M5 8h10M5 13h10"/><circle cx="2" cy="3" r=".75"/><circle cx="2" cy="8" r=".75"/><circle cx="2" cy="13" r=".75"/></svg>
-      </button>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+    <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></symbol>
+    <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z"/></symbol>
+    <symbol id="icon-star" viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3Z"/></symbol>
+    <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="icon-map-pin" viewBox="0 0 24 24"><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+    <symbol id="icon-thumbs-up" viewBox="0 0 24 24"><path d="M7 10v12H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h3Zm0 0 5-8a3 3 0 0 1 2 3l-1 5h6a2 2 0 0 1 2 2l-2 8a2 2 0 0 1-2 2H7"/></symbol>
+    <symbol id="icon-thumbs-down" viewBox="0 0 24 24"><path d="M7 14V2H4a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3Zm0 0 5 8a3 3 0 0 0 2-3l-1-5h6a2 2 0 0 0 2-2l-2-8a2 2 0 0 0-2-2H7"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m18 6-12 12M6 6l12 12"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="icon-x" viewBox="0 0 24 24"><path d="m18 6-12 12M6 6l12 12"/></symbol>
+    <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+    <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="icon-chevron-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></symbol>
+    <symbol id="icon-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+    <symbol id="icon-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+    <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="icon-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="icon-film-reel" viewBox="0 0 64 64"><circle cx="32" cy="32" r="27"/><circle cx="32" cy="32" r="6"/><circle cx="32" cy="16" r="4"/><circle cx="45.9" cy="24" r="4"/><circle cx="45.9" cy="40" r="4"/><circle cx="32" cy="48" r="4"/><circle cx="18.1" cy="40" r="4"/><circle cx="18.1" cy="24" r="4"/></symbol>
+  </svg>
+  <div class="loading-screen" data-loading-screen aria-hidden="true">
+    <img src="{{ url_for('static', filename='images/movie-finder-logo.gif') }}" alt="" />
+    <span>Movie Finder</span>
+  </div>
+
+  <header class="site-header">
+    <div class="site-header__inner">
+      <div class="site-header__brand">
+        <a class="site-header__home" href="{{ url_for('index') }}" aria-label="Movie Finder home">
+          <img class="site-header__logo" src="{{ url_for('static', filename='images/movie-finder-logo.gif') }}" alt="Movie Finder logo" width="56" height="56" />
+        </a>
+        <div>
+          <h1 data-i18n="brand">Movie Finder</h1>
+          <p data-i18n="headerSubtitle">Search by description or browse movies by genre.</p>
+        </div>
+      </div>
+      <div class="site-header__tools">
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch theme">
+          <span class="theme-toggle__icon" data-theme-icon="moon" aria-hidden="true"><svg class="icon icon-moon"><use href="#icon-moon"></use></svg><svg class="icon icon-sun"><use href="#icon-sun"></use></svg></span>
+        </button>
+        <div class="accent-picker" role="group" aria-label="Accent color">
+          <button type="button" data-accent-choice="blue" aria-label="Blue accent" title="Blue accent" aria-pressed="true"><span class="accent-picker__swatch"></span><svg class="icon accent-picker__check"><use href="#icon-check"></use></svg></button>
+          <button type="button" data-accent-choice="teal" aria-label="Teal accent" title="Teal accent" aria-pressed="false"><span class="accent-picker__swatch"></span><svg class="icon accent-picker__check"><use href="#icon-check"></use></svg></button>
+          <button type="button" data-accent-choice="violet" aria-label="Violet accent" title="Violet accent" aria-pressed="false"><span class="accent-picker__swatch"></span><svg class="icon accent-picker__check"><use href="#icon-check"></use></svg></button>
+        </div>
+        <label class="sr-only" for="ui-language" data-i18n="interfaceLanguage">Interface language</label>
+        <span class="dropdown-control dropdown-control--header">
+          <select id="ui-language" class="genre-filter" aria-label="Interface language">
+            <option value="en" lang="en" selected>English</option>
+            <option value="es" lang="es">Español</option>
+            <option value="tl" lang="tl">Tagalog</option>
+            <option value="fr" lang="fr">Français</option>
+            <option value="de" lang="de">Deutsch</option>
+            <option value="pt" lang="pt">Português</option>
+            <option value="ja" lang="ja">日本語</option>
+            <option value="ko" lang="ko">한국어</option>
+            <option value="zh" lang="zh">中文</option>
+          </select>
+        </span>
+      </div>
     </div>
+  </header>
+
+  <main class="stage">
+
+    <section class="search" aria-label="Movie search" data-i18n-aria="searchRegion">
+      <form class="search__form" action="{{ url_for('index') }}" method="get">
+        <label class="search__label" for="q" data-i18n="findLabel">Find a movie</label>
+        <div class="search__row">
+          <div class="search__entry">
+            <div class="search__highlight-layer" aria-hidden="true" hidden></div>
+            <textarea
+              id="q"
+              name="q"
+              class="search__input"
+              rows="1"
+              data-i18n-placeholder="searchPlaceholder"
+              placeholder="e.g. I want something suspenseful but not horror, preferably a mystery under two hours."
+              autocomplete="off"
+              aria-autocomplete="list"
+              aria-controls="search-suggestions recent-searches"
+              aria-expanded="false"
+            >{{ query }}</textarea>
+            <div class="search__genre-controls">
+              <div class="search__genre-chips" data-genre-chips aria-label="Selected genres">
+                {% for genre in selected_genres %}
+                  <span class="active-filter-chip" data-selected-genre="{{ genre }}">
+                    <input type="hidden" name="genre" value="{{ genre }}" />
+                    <span class="active-filter-chip__label" data-i18n-genre="{{ genre }}">{{ genre|title }}</span>
+                    <button class="active-filter-chip__remove" type="button" data-remove-genre="{{ genre }}" aria-label="Remove {{ genre|title }} genre" title="Remove {{ genre|title }}"><svg class="icon"><use href="#icon-x"></use></svg></button>
+                  </span>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+          <button class="search__button" type="submit" data-i18n="findButton">Find Movies</button>
+          <div id="search-suggestions" class="search-suggestions" role="listbox" hidden></div>
+          <div id="recent-searches" class="search-suggestions recent-searches" role="listbox" hidden>
+            <div class="recent-searches__header">
+              <strong data-i18n="recentSearches">Recent searches</strong>
+              <button type="button" data-clear-recent data-i18n="clearRecentSearches">Clear history</button>
+            </div>
+            <div data-recent-items></div>
+          </div>
+        </div>
+        <div class="search__filters">
+          <div class="filter-row">
+          <label id="genre-picker-label" data-i18n="genreLabel">Genre</label>
+          <details class="genre-picker" data-genre-menu>
+            <summary class="genre-picker__trigger" aria-labelledby="genre-picker-label">
+              <span data-i18n="allGenres">All genres</span>
+              <span class="genre-picker__chevron" aria-hidden="true"></span>
+            </summary>
+            <div class="genre-picker__menu" role="group" aria-label="Add genres">
+              <label class="sr-only" for="genre-menu-search" data-i18n="searchGenres">Search genres</label>
+              <input id="genre-menu-search" class="genre-picker__search" type="search" placeholder="Search genres" data-i18n-placeholder="searchGenres" autocomplete="off" />
+              {% for genre in genres %}
+                <div class="genre-picker__option" data-genre-option data-genre-name="{{ genre }}">
+                  <span class="genre-picker__name" data-i18n-genre="{{ genre }}">{{ genre|title }}</span>
+                  <button class="genre-picker__add" type="button" data-add-genre="{{ genre }}" aria-label="Add {{ genre|title }} genre" title="Add {{ genre|title }}" {% if genre in selected_genres %}disabled{% endif %}><svg class="icon"><use href="#icon-plus"></use></svg></button>
+                </div>
+              {% endfor %}
+              <p class="genre-picker__empty" data-no-genres data-i18n="noGenresMatch" hidden>No genres match.</p>
+            </div>
+          </details>
+          <label for="awards" data-i18n="recognitionLabel">Recognition</label>
+          <span class="dropdown-control">
+            <select id="awards" name="awards" class="genre-filter">
+              <option value="" {% if not award_filter %}selected{% endif %} data-i18n="allFilms">All films</option>
+              <option value="winners" {% if award_filter %}selected{% endif %} data-i18n="awardWinners">Major award winners</option>
+            </select>
+          </span>
+          <label for="per_page" data-i18n="perPageLabel">Per page</label>
+          <span class="dropdown-control">
+            <select id="per_page" name="per_page" class="genre-filter">
+              {% for option in per_page_options %}
+                <option value="{{ option }}" {% if per_page == option %}selected{% endif %}>{{ option }}</option>
+              {% endfor %}
+            </select>
+          </span>
+          <button class="clear-filter" type="button" data-clear-filters data-i18n="clearAllFilters" {% if not selected_genres and not selected_awards %}hidden{% endif %}>Clear all filters</button>
+          </div>
+          <details class="range-refinements">
+            <summary>More filters</summary>
+            <div class="range-refinements__grid">
+              <label for="runtime-range">Maximum runtime <output for="runtime-range">240 min</output></label>
+              <input id="runtime-range" type="range" min="60" max="240" step="5" value="240" aria-label="Maximum runtime in minutes" />
+              <label for="year-range">From release year <output for="year-range">1880</output></label>
+              <input id="year-range" type="range" min="1880" max="2026" step="1" value="1880" aria-label="Earliest release year" />
+              <label for="rating-range">Minimum IMDb rating <output for="rating-range">0.0</output></label>
+              <input id="rating-range" type="range" min="0" max="10" step="0.5" value="0" aria-label="Minimum IMDb rating" aria-describedby="rating-range-note" disabled />
+              <span class="range-unavailable" id="rating-range-note">Unavailable: the current local parser does not support minimum-rating filters.</span>
+            </div>
+          </details>
+        </div>
+      </form>
+      {% if not query %}
+        <section class="mood-picks" aria-labelledby="mood-picks-title">
+          <h2 id="mood-picks-title">Pick a mood</h2>
+          <div class="mood-picks__tiles">
+            <button type="button" data-mood-query="relaxing movies">Cozy</button>
+            <button type="button" data-mood-query="tense movies">Tense</button>
+            <button type="button" data-mood-query="mind bending movies">Mind-bending</button>
+            <button type="button" data-mood-query="happy movies">Feel-good</button>
+          </div>
+        </section>
+      {% endif %}
+      <div class="support-actions">
+        <button type="button" data-open-help>Help and examples</button>
+        <button type="button" data-open-about>About this data</button>
+      </div>
+      {% for conflict in filter_conflicts %}
+        <p class="filter-conflict" data-i18n="{{ 'genreFilterConflict' if 'genre' in conflict else 'countryFilterConflict' }}">{{ conflict }}</p>
+      {% endfor %}
+      <p class="search__status" role="status" aria-live="polite"></p>
+      <div class="offline-notice" data-offline-notice role="status" aria-live="polite" hidden>
+        <span data-offline-message></span>
+        <button type="button" data-offline-retry>Retry</button>
+      </div>
+      <div class="search-feedback" aria-live="polite">
+        {% if assistant_message %}
+          <p class="assistant-message" data-assistant-state="{{ assistant_state }}">{{ assistant_message }}</p>
+        {% elif search_notice %}
+          <p class="search-notice">{{ search_notice }}</p>
+        {% endif %}
+        {% if alternative_queries and assistant_state in ['empty', 'unmapped'] %}
+          <ul class="search-alternatives">
+            {% for alternative in alternative_queries[:3] %}
+              <li><a href="{{ url_for('index', q=alternative, per_page=per_page, genre=selected_genre, awards='winners' if award_filter else '') }}">{{ alternative }}</a></li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+      {% if query %}
+        <details class="query-pipeline">
+          <summary>How I read this</summary>
+          <div class="query-pipeline__content">
+            {% if debug_view and debug_view.normalized_query %}<p><strong>Normalized text:</strong> <code>{{ debug_view.normalized_query }}</code></p>{% endif %}
+            {% set recognized = query_debug.get('genres', []) + query_debug.get('moods', []) + query_debug.get('themes', []) %}
+            {% if recognized %}<p><strong>Recognized categories:</strong> {{ recognized | unique | map('title') | join(', ') }}</p>{% endif %}
+            {% set exclusions = query_debug.get('excluded_genres', []) %}
+            {% if exclusions %}<p><strong>Excluded:</strong> {{ exclusions | unique | map('title') | join(', ') }}</p>{% endif %}
+            {% for tag in preference_tags %}
+              {% if tag.label | lower in ['runtime', 'year'] %}<p><strong>{{ tag.label }}:</strong> {{ tag.value }}</p>{% endif %}
+            {% endfor %}
+            {% if not recognized and not exclusions and not debug_view %}<p>There are no structured parser details for this query.</p>{% endif %}
+          </div>
+        </details>
+      {% endif %}
+      {% if preference_tags %}
+        {% set removable = preference_tags | selectattr('remove_url') | list %}
+        {% if removable %}
+          <p class="interpretation">I understood:
+            {% for tag in removable %}
+              <span class="interpretation__part">{{ tag.phrase }}<a class="pref-tag__remove" href="{{ tag.remove_url }}" aria-label="Remove {{ tag.phrase }}" title="Remove">&times;</a></span>{{ ',' if not loop.last else '.' }}
+            {% endfor %}
+          </p>
+        {% endif %}
+        <div class="preferences__grid understood-strip" aria-label="Understood criteria">
+          {% for tag in preference_tags %}
+            <span class="pref-tag pref-tag--{{ tag.type }}">
+              {% if tag.type == 'include' %}<span class="pref-tag__sign" aria-hidden="true">+</span>{% elif tag.type == 'exclude' %}<span class="pref-tag__sign" aria-hidden="true">−</span>{% endif %}
+              <span class="pref-tag__label">{{ tag.label }}</span>{{ tag.value }}
+              {% if tag.remove_url %}<a class="pref-tag__remove" href="{{ tag.remove_url }}" aria-label="Remove {{ tag.label }} {{ tag.value }}" title="Remove">&times;</a>{% endif %}
+            </span>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </section>
+
+    {% if debug_enabled and debug_view %}
+      <section class="debug-panel" aria-label="Query interpretation debug" data-i18n-aria="queryDebug">
+        <h2 data-i18n="queryDebug">Query Debug</h2>
+        <dl class="debug-grid">
+          <dt data-i18n="userQuery">User query</dt><dd>{{ debug_view.raw_query }}</dd>
+          <dt data-i18n="normalized">Normalized</dt><dd>{{ debug_view.normalized_query }}</dd>
+          <dt data-i18n="detectedIntent">Detected intent</dt><dd>{{ debug_view.intent }}</dd>
+          <dt data-i18n="detectedCountry">Detected country</dt><dd>{{ debug_view.country }}</dd>
+          <dt data-i18n="detectedGenre">Detected genre</dt><dd>{{ debug_view.genres }}</dd>
+          <dt data-i18n="detectedYear">Detected year</dt><dd>{{ debug_view.year }}</dd>
+          <dt data-i18n="negativeFilters">Negative filters</dt><dd>{{ debug_view.excluded_genres }}</dd>
+          <dt data-i18n="negativeContent">Negative content</dt><dd>{{ debug_view.excluded_content_descriptors }}</dd>
+          <dt data-i18n="unsupportedMetadata">Unsupported metadata</dt><dd>{{ debug_view.unsupported_filters or 'none' }}</dd>
+          <dt data-i18n="semanticDescription">Semantic description</dt><dd>{{ debug_view.semantic_description }}</dd>
+          <dt data-i18n="ranking">Ranking</dt><dd>{{ debug_view.ranking_order }}</dd>
+        </dl>
+        <h3 data-i18n="structuredQuery">Structured Query</h3>
+        <pre>{{ debug_view.structured_json }}</pre>
+        <h3 data-i18n="filterResults">Filter Results</h3>
+        {% if debug_view.filter_results %}
+          <ul class="debug-filters">
+            {% for name, status, detail in debug_view.filter_results %}
+              <li><strong>{{ name }}:</strong> {{ status }} - {{ detail }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p data-i18n="noExplicitFilters">No explicit metadata filters detected.</p>
+        {% endif %}
+      </section>
+    {% endif %}
+
+    <section class="results" aria-label="Movies" data-i18n-aria="moviesRegion" data-runtime-constraint="{{ (preference_tags | selectattr('label', 'equalto', 'Runtime') | map(attribute='value') | list | first) or '' }}" data-feedback-saved="{{ 'true' if feedback_saved else 'false' }}">
+        <div class="results__header">
+          <h2 class="section-title" data-i18n="{{ 'recommendedMovies' if searched else 'allMovies' }}">{{ 'Recommended Movies' if searched else 'All Movies' }}</h2>
+          <div class="results__controls">
+            {% if query or selected_genres or selected_awards or searched %}
+              <span class="results__count" role="status" aria-live="polite" data-result-count="{{ result_count }}" data-result-kind="{{ 'exact' if 'exact' in result_count_label else 'closest' if result_count_label else 'browse' }}">{{ result_count_label or (result_count ~ ' match' ~ ('' if result_count == 1 else 'es')) }}</span>
+            {% endif %}
+            <div class="results__view-controls">
+              <label class="sr-only" for="result-sort" data-i18n="sortResults">Sort results</label>
+              <span class="dropdown-control results__sort-control">
+                <select id="result-sort" class="genre-filter" aria-label="Sort results">
+                  <option value="match" data-i18n="sortMatch">Best match</option>
+                  <option value="popular" data-i18n="sortPopular">Most popular</option>
+                  <option value="rating" data-i18n="sortRating">Highest rated</option>
+                  <option value="newest" data-i18n="sortNewest">Newest</option>
+                </select>
+              </span>
+              <div class="view-toggle" role="group" aria-label="Result layout">
+                <button type="button" data-view-mode="grid" aria-label="Grid view" aria-pressed="true" title="Grid view"><svg class="icon"><use href="#icon-grid"></use></svg></button>
+                <button type="button" data-view-mode="list" aria-label="List view" aria-pressed="false" title="List view"><svg class="icon"><use href="#icon-list"></use></svg></button>
+              </div>
+            </div>
+            <span class="sr-only" data-compare-status role="status" aria-live="polite"></span>
+          </div>
+        </div>
+        {% if result_count %}
+          {% set range_start = ((page_number - 1) * per_page) + 1 %}
+          {% set range_end = [page_number * per_page, result_count] | min %}
+          <p class="results__range" role="status" aria-live="polite">Showing {{ range_start }}-{{ range_end }} of {{ result_count }}</p>
+        {% endif %}
+        {% if feedback_saved %}<p class="search-notice" role="status" data-i18n="feedbackSaved">Feedback saved. Thanks.</p>{% endif %}
+
+        {% if total_pages > 1 and (searched or movies) %}
+          <nav class="pagination pagination--top" aria-label="Movie pages" data-i18n-aria="paginationLabel">
+            <button type="button" class="pagination__button" data-page-url="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="previousPage" {% if page_number <= 1 %}disabled{% endif %}>Previous</button>
+            <form class="page-jump" data-pagination-form method="get" action="{{ url_for('index') }}">
+              <input type="hidden" name="q" value="{{ query }}" />
+              {% for genre in selected_genres %}<input type="hidden" name="genre" value="{{ genre }}" />{% endfor %}
+              {% for award in selected_awards %}<input type="hidden" name="awards" value="{{ award }}" />{% endfor %}
+              <input type="hidden" name="per_page" value="{{ per_page }}" />
+              <input type="hidden" name="nationality" value="{{ selected_nationality }}" />
+              <input type="hidden" name="debug" value="{{ '1' if debug_enabled else '' }}" />
+              {% for dropped_filter in dropped %}<input type="hidden" name="drop" value="{{ dropped_filter }}" />{% endfor %}
+              <label for="page-top">Page</label>
+              <input id="page-top" class="page-jump__input" name="page" type="number" min="1" max="{{ total_pages }}" value="{{ page_number }}" inputmode="numeric" aria-label="Jump to page" />
+              <span>of {{ total_pages }}</span>
+            </form>
+            <button type="button" class="pagination__button" data-page-url="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="nextPage" {% if page_number >= total_pages %}disabled{% endif %}>Next</button>
+          </nav>
+        {% endif %}
+
+        {% if searched and results %}
+          <div class="results__list">
+            {% for r in results %}
+              <article class="movie-card" tabindex="0" data-detail-title="{{ r.movie.title }}" data-detail-year="{{ r.movie.get('release_year') or '' }}" data-detail-runtime="{{ r.movie.get('runtime') or '' }}" data-detail-rating="{{ r.movie.get('average_rating') or '' }}" data-detail-votes="{{ r.movie.get('vote_count') or '' }}" data-detail-certification="{{ r.movie.get('certification') or '' }}" data-detail-quality="{{ r.movie.get('quality') or '' }}" data-detail-descriptors="{{ (r.movie.get('content_descriptors') or []) | join(' · ') }}" data-detail-imdb-id="{{ r.movie.get('imdb_id') or '' }}" data-detail-synopsis="{{ r.movie.get('overview') or r.movie.get('synopsis') or '' }}" data-similarity-text="{{ r.movie.title ~ ' ' ~ (r.movie.get('overview') or r.movie.get('synopsis') or '') ~ ' ' ~ ((r.movie.get('genres') or []) | join(' ')) ~ ' ' ~ ((r.movie.get('themes') or []) | join(' ')) ~ ' ' ~ ((r.movie.get('mood_tags') or []) | join(' ')) ~ ' ' ~ ((r.movie.get('keywords') or []) | join(' ')) }}" data-sort-rank="{{ r.rank }}" data-sort-title="{{ r.movie.title }}" data-sort-rating="{{ r.movie.get('average_rating') or 0 }}" data-sort-votes="{{ r.movie.get('vote_count') or 0 }}" data-sort-year="{{ r.movie.get('release_year') or 0 }}">
+                <div class="movie-card__poster">
+                  {% if movie_poster_url(r.movie) %}
+                    <img src="{{ movie_poster_url(r.movie) }}" alt="{{ r.movie.title }} poster" data-poster-title="{{ r.movie.title }}" data-poster-fallback="{{ url_for('static', filename='poster-placeholder.svg') }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
+                  {% elif r.poster_exists %}
+                    <img src="{{ url_for('static', filename='images/' ~ r.movie.id ~ '.jpg') }}" alt="{{ r.movie.title }} poster" data-poster-title="{{ r.movie.title }}" data-poster-fallback="{{ url_for('static', filename='poster-placeholder.svg') }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
+                  {% else %}
+                    <img src="{{ url_for('static', filename='poster-placeholder.svg') }}" alt="{{ r.movie.title }} poster unavailable" data-poster-title="{{ r.movie.title }}" data-poster-fallback="{{ url_for('static', filename='poster-placeholder.svg') }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
+                  {% endif %}
+                </div>
+                <template class="movie-card__preview-template">
+                  <div class="movie-preview" aria-label="Movie preview">
+                    <div class="movie-preview__image"><img alt="" loading="lazy" decoding="async" /></div>
+                    <div class="movie-preview__content">
+                      <div class="movie-preview__actions">
+                        <button type="button" class="movie-preview__button movie-preview__button--primary" data-preview-open aria-label="View details" title="View details"><svg class="icon"><use href="#icon-info"></use></svg></button>
+                        <button type="button" class="movie-preview__button" data-preview-feedback="1" aria-label="Relevant" title="Relevant"><svg class="icon"><use href="#icon-thumbs-up"></use></svg></button>
+                        <button type="button" class="movie-preview__button" data-preview-feedback="0" aria-label="Not relevant" title="Not relevant"><svg class="icon"><use href="#icon-thumbs-down"></use></svg></button>
+                        <button type="button" class="movie-preview__button movie-preview__button--chevron" data-preview-open aria-label="View details" title="View details"><svg class="icon"><use href="#icon-chevron-right"></use></svg></button>
+                      </div>
+                      <div class="movie-preview__meta"></div>
+                      <div class="movie-preview__tags"></div>
+                      <div class="movie-preview__top-rated" hidden><svg class="icon"><use href="#icon-thumbs-up"></use></svg> Top Rated</div>
+                    </div>
+                  </div>
+                </template>
+                <template class="movie-card__preview-tags">{% for tag in (r.movie.get('mood_tags') or r.movie.get('genres') or [])[:3] %}<span>{{ tag | title }}</span>{% endfor %}</template>
+                <template class="movie-card__genres">{% for genre in r.movie.get('genres') or [] %}<span>{{ genre | title }}</span>{% endfor %}</template>
+                <template class="movie-card__moods">{% for mood in r.movie.get('mood_tags') or [] %}<span>{{ mood | title }}</span>{% endfor %}</template>
+                <template class="movie-card__themes">{% for theme in r.movie.get('themes') or [] %}<span>{{ theme | title }}</span>{% endfor %}</template>
+                <template class="movie-card__detail-cast">{% for person in (r.movie.get('cast') or r.movie.get('actors') or []) %}<li>{{ person.get('name', '') if person is mapping else person }}</li>{% endfor %}</template>
+                <div class="movie-card__content">
+                  <div class="movie-card__head"><div class="movie-card__rank">#{{ r.rank }}</div><span class="movie-card__percent" data-match-breakdown data-breakdown-id="match-breakdown-{{ r.movie.id }}">{{ r.percent }}% match</span>
+                    <div class="match-breakdown" id="match-breakdown-{{ r.movie.id }}" role="dialog" aria-label="Match breakdown" hidden>
+                      <strong>Match breakdown</strong>
+                      {% for key, label in [('genre', 'Genre'), ('mood', 'Mood'), ('theme', 'Theme'), ('runtime', 'Runtime'), ('keyword', 'Keyword')] %}
+                        {% set raw_score = r.breakdown.get(key) %}
+                        {% if key in ['genre', 'mood', 'theme'] and raw_score %}{% set score_value = raw_score.fraction %}{% else %}{% set score_value = raw_score %}{% endif %}
+                        {% if score_value is not none %}
+                          <div class="match-breakdown__row"><span>{{ label }}</span><span class="match-breakdown__track" role="img" aria-label="{{ label }} contribution {{ (score_value * 100)|round|int }} percent"><span style="--score-width: {{ (score_value * 100)|round|int }}%"></span></span><strong>{{ (score_value * 100)|round|int }}%</strong></div>
+                        {% endif %}
+                      {% endfor %}
+                    </div>
+                  </div>
+                  <div class="match-badges">
+                    <span class="match-badge match-badge--{{ r.match_level }}" data-i18n="{{ 'exactMatch' if r.match_level == 'full' else 'closestMatch' }}">{{ r.match_badge }}</span>
+                    {% if r.show_unverified_badge %}<span class="match-badge match-badge--unverified" data-i18n="unverified">Unverified</span>{% endif %}
+                  </div>
+                  <div class="movie-card__title-row"><h3 class="movie-card__title">{{ r.movie.title }}</h3>{% if r.movie.get('release_year') %}<span class="movie-card__year">({{ r.movie.release_year }})</span>{% endif %}</div>
+                  <button type="button" class="movie-compare-toggle" data-compare-select aria-pressed="false">Compare</button>
+                  <button type="button" class="movie-card__detail-trigger" data-open-detail>Movie details</button>
+                  <template class="movie-card__cast">{% for person in (r.movie.get('cast') or r.movie.get('actors') or [])[:8] %}<li>{{ person.get('name', '') if person is mapping else person }}</li>{% endfor %}</template>
+                  {% if r.movie.get('release_year') %}<div class="movie-card__meta sr-only">· {{ r.movie.release_year }}</div>{% endif %}
+                  {% if r.movie.get('original_title') and r.movie.original_title != r.movie.title %}<div class="movie-card__meta"><span data-i18n="originalTitle">Original title</span>: <span lang="und">{{ r.movie.original_title }}</span></div>{% endif %}
+                  <div class="movie-card__genres" aria-label="Genres">{% for genre in r.movie.genres %}<span class="genre-pill" data-i18n-genre="{{ genre }}">{{ genre|title }}</span>{% endfor %}</div>
+                  <div class="movie-card__facts"><span><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg> {{ r.movie.runtime }} min</span><span><svg class="icon" aria-hidden="true"><use href="#icon-map-pin"></use></svg> {% if movie_origin_label(r.movie) %}{{ movie_origin_label(r.movie) }}{% else %}<span data-i18n="originUnavailable">Origin unavailable</span>{% endif %}</span></div>
+                  <span class="runtime-fit" data-runtime-fit hidden></span>
+                  {% if r.movie.get('certification') %}<span class="movie-age-rating" data-i18n="contentRating">Age rating</span><span class="movie-age-rating__value">{{ r.movie.certification }}</span>{% endif %}
+                  <p class="movie-card__match-reason">{{ r.match_reason }}</p>
+                  {% if r.show_cast_evidence %}
+                    <div class="cast-evidence cast-evidence--{{ r.cast_status.status }}">
+                      <strong class="cast-evidence__badge">{{ r.cast_badge }}</strong>
+                      <p>{{ r.cast_status.reason }}</p>
+                      <small>{{ r.cast_evidence.evidence_line }}</small>
+                    </div>
+                  {% endif %}
+                  {% if r.movie.get('average_rating') is not none %}
+                    <div class="movie-card__rating"><svg class="icon" aria-hidden="true"><use href="#icon-star"></use></svg> <span class="rating-visual" aria-hidden="true"><span style="--rating-fill: {{ [[r.movie.average_rating * 10, 0]|max, 100]|min }}%"></span></span> IMDb {{ '%.1f'|format(r.movie.average_rating) }}/10 <small>{{ '{:,}'.format(r.movie.vote_count) }} votes</small></div>
+                  {% endif %}
+                  {% if r.movie.notable_awards %}
+                    <p class="movie-card__recognition">{{ r.movie.notable_awards | join(' · ') }}</p>
+                  {% endif %}
+                  {% set synopsis = r.movie.get('overview') or r.movie.get('synopsis') %}
+                  {% if synopsis and not synopsis.startswith('IMDb rating ') and not ('), a ' in synopsis and synopsis.endswith(' movie.')) %}<p class="movie-card__synopsis">{{ synopsis }}</p>{% endif %}
+                  {% if r.movie.get('poster_source_url') %}<a class="movie-card__poster-credit" href="{{ r.movie.poster_source_url }}" target="_blank" rel="noopener noreferrer" data-i18n="commonsCredit">Poster image source: Wikimedia Commons</a>{% endif %}
+                  <details class="match-details">
+                    <summary data-i18n="whyMatched">Why this matched</summary>
+                    <div class="match-details__scores">
+                      {% for key, label in [('genre', 'Genre'), ('mood', 'Mood'), ('theme', 'Theme'), ('runtime', 'Runtime'), ('keyword', 'Plot keywords')] %}
+                        {% set raw_score = r.breakdown.get(key) %}
+                        {% if key in ['genre', 'mood', 'theme'] and raw_score %}{% set score_value = raw_score.fraction %}{% else %}{% set score_value = raw_score %}{% endif %}
+                        {% if score_value is not none %}
+                          <div class="score-row"><span>{{ label }}</span><span class="score-track" role="img" aria-label="{{ label }} score {{ (score_value * 100)|round|int }} percent"><span style="--score-width: {{ (score_value * 100)|round|int }}%"></span></span><strong>{{ (score_value * 100)|round|int }}%</strong></div>
+                        {% endif %}
+                      {% endfor %}
+                    </div>
+                    <ul class="movie-card__reasons">
+                      {% for reason in r.reasons %}
+                        <li><span class="reason-icon {{ 'reason-icon--ok' if reason.ok else 'reason-icon--miss' }}"><svg class="icon" aria-hidden="true"><use href="{{ '#icon-check' if reason.ok else '#icon-x' }}"></use></svg></span><span class="{{ 'reason-text--ok' if reason.ok else 'reason-text--miss' }}">{{ reason.text }}</span></li>
+                      {% endfor %}
+                    </ul>
+                  </details>
+                  <form class="movie-card__feedback" action="{{ url_for('submit_feedback') }}" method="post">
+                    <input type="hidden" name="query" value="{{ query }}" />
+                    <input type="hidden" name="movie_id" value="{{ r.movie.id }}" />
+                    <button type="submit" name="relevant" value="1" aria-label="Relevant" aria-pressed="false" data-i18n-aria="relevant" title="Relevant"><svg class="icon" aria-hidden="true"><use href="#icon-thumbs-up"></use></svg><svg class="icon feedback-selected-check" data-feedback-check aria-hidden="true" hidden><use href="#icon-check"></use></svg><span class="sr-only" data-i18n="relevant">Relevant</span></button>
+                    <button type="submit" name="relevant" value="0" aria-label="Not relevant" aria-pressed="false" data-i18n-aria="notRelevant" title="Not relevant"><svg class="icon" aria-hidden="true"><use href="#icon-thumbs-down"></use></svg><svg class="icon feedback-selected-check" data-feedback-check aria-hidden="true" hidden><use href="#icon-check"></use></svg><span class="sr-only" data-i18n="notRelevant">Not relevant</span></button>
+                    <span class="feedback-confirmation" data-feedback-status role="status" aria-live="polite" hidden></span>
+                  </form>
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+        {% elif not searched and movies %}
+          <div class="results__list">
+            {% for item in movies %}
+              {% set movie = item.movie %}
+              <article class="movie-card movie-card--browse" tabindex="0" data-detail-title="{{ movie.title }}" data-detail-year="{{ movie.get('release_year') or '' }}" data-detail-runtime="{{ movie.get('runtime') or '' }}" data-detail-rating="{{ movie.get('average_rating') or '' }}" data-detail-votes="{{ movie.get('vote_count') or '' }}" data-detail-certification="{{ movie.get('certification') or '' }}" data-detail-quality="{{ movie.get('quality') or '' }}" data-detail-descriptors="{{ (movie.get('content_descriptors') or []) | join(' · ') }}" data-detail-imdb-id="{{ movie.get('imdb_id') or '' }}" data-detail-synopsis="{{ movie.get('overview') or movie.get('synopsis') or '' }}" data-similarity-text="{{ movie.title ~ ' ' ~ (movie.get('overview') or movie.get('synopsis') or '') ~ ' ' ~ ((movie.get('genres') or []) | join(' ')) ~ ' ' ~ ((movie.get('themes') or []) | join(' ')) ~ ' ' ~ ((movie.get('mood_tags') or []) | join(' ')) ~ ' ' ~ ((movie.get('keywords') or []) | join(' ')) }}" data-sort-rank="{{ loop.index }}" data-sort-title="{{ movie.title }}" data-sort-rating="{{ movie.get('average_rating') or 0 }}" data-sort-votes="{{ movie.get('vote_count') or 0 }}" data-sort-year="{{ movie.get('release_year') or 0 }}">
+                <div class="movie-card__poster">
+                  {% if movie_poster_url(movie) %}
+                    <img src="{{ movie_poster_url(movie) }}" alt="{{ movie.title }} poster" data-poster-title="{{ movie.title }}" data-poster-fallback="{{ url_for('static', filename='poster-placeholder.svg') }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
+                  {% elif item.poster_exists %}
+                    <img src="{{ url_for('static', filename='images/' ~ movie.id ~ '.jpg') }}" alt="{{ movie.title }} poster" data-poster-title="{{ movie.title }}" data-poster-fallback="{{ url_for('static', filename='poster-placeholder.svg') }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
+                  {% else %}
+                    <img src="{{ url_for('static', filename='poster-placeholder.svg') }}" alt="{{ movie.title }} poster unavailable" data-poster-title="{{ movie.title }}" data-poster-fallback="{{ url_for('static', filename='poster-placeholder.svg') }}" data-i18n-alt="posterAlt" loading="lazy" decoding="async" />
+                  {% endif %}
+                </div>
+                <template class="movie-card__preview-template">
+                  <div class="movie-preview" aria-label="Movie preview">
+                    <div class="movie-preview__image"><img alt="" loading="lazy" decoding="async" /></div>
+                    <div class="movie-preview__content">
+                      <div class="movie-preview__actions">
+                        <button type="button" class="movie-preview__button movie-preview__button--primary" data-preview-open aria-label="View details" title="View details"><svg class="icon"><use href="#icon-info"></use></svg></button>
+                        <button type="button" class="movie-preview__button" data-preview-feedback="1" aria-label="Relevant" title="Relevant"><svg class="icon"><use href="#icon-thumbs-up"></use></svg></button>
+                        <button type="button" class="movie-preview__button" data-preview-feedback="0" aria-label="Not relevant" title="Not relevant"><svg class="icon"><use href="#icon-thumbs-down"></use></svg></button>
+                        <button type="button" class="movie-preview__button movie-preview__button--chevron" data-preview-open aria-label="View details" title="View details"><svg class="icon"><use href="#icon-chevron-right"></use></svg></button>
+                      </div>
+                      <div class="movie-preview__meta"></div>
+                      <div class="movie-preview__tags"></div>
+                      <div class="movie-preview__top-rated" hidden><svg class="icon"><use href="#icon-thumbs-up"></use></svg> Top Rated</div>
+                    </div>
+                  </div>
+                </template>
+                <template class="movie-card__preview-tags">{% for tag in (movie.get('mood_tags') or movie.get('genres') or [])[:3] %}<span>{{ tag | title }}</span>{% endfor %}</template>
+                <template class="movie-card__genres">{% for genre in movie.get('genres') or [] %}<span>{{ genre | title }}</span>{% endfor %}</template>
+                <template class="movie-card__moods">{% for mood in movie.get('mood_tags') or [] %}<span>{{ mood | title }}</span>{% endfor %}</template>
+                <template class="movie-card__themes">{% for theme in movie.get('themes') or [] %}<span>{{ theme | title }}</span>{% endfor %}</template>
+                <template class="movie-card__detail-cast">{% for person in (movie.get('cast') or movie.get('actors') or []) %}<li>{{ person.get('name', '') if person is mapping else person }}</li>{% endfor %}</template>
+                <div class="movie-card__content">
+                  <div class="movie-card__title-row"><h3 class="movie-card__title">{{ movie.title }}</h3>{% if movie.get('release_year') %}<span class="movie-card__year">({{ movie.release_year }})</span>{% endif %}</div>
+                  <button type="button" class="movie-compare-toggle" data-compare-select aria-pressed="false">Compare</button>
+                  <button type="button" class="movie-card__detail-trigger" data-open-detail>Movie details</button>
+                  <template class="movie-card__cast">{% for person in (movie.get('cast') or movie.get('actors') or [])[:8] %}<li>{{ person.get('name', '') if person is mapping else person }}</li>{% endfor %}</template>
+                  {% if movie.get('release_year') %}<div class="movie-card__meta sr-only">· {{ movie.release_year }}</div>{% endif %}
+                  {% if movie.get('original_title') and movie.original_title != movie.title %}<div class="movie-card__meta"><span data-i18n="originalTitle">Original title</span>: <span lang="und">{{ movie.original_title }}</span></div>{% endif %}
+                  <div class="movie-card__meta">{{ movie.genres | map('title') | join(', ') }} · {{ movie.runtime }} min · {{ movie.release_year }}
+                    {% if movie_origin_label(movie) %} · <span data-i18n="originLabel">Origin</span>: {{ movie_origin_label(movie) }}{% else %} · <span data-i18n="originUnavailable">Origin unavailable</span>{% endif %}
+                  </div>
+                  {% if movie.get('runtime') %}<span class="runtime-fit" data-runtime-fit hidden></span>{% endif %}
+                  {% if movie.get('certification') %}<span class="movie-age-rating" data-i18n="contentRating">Age rating</span><span class="movie-age-rating__value">{{ movie.certification }}</span>{% endif %}
+                  {% if movie.get('average_rating') is not none %}
+                    <div class="movie-card__meta"><svg class="icon" aria-hidden="true"><use href="#icon-star"></use></svg> <span class="rating-visual" aria-hidden="true"><span style="--rating-fill: {{ [[movie.average_rating * 10, 0]|max, 100]|min }}%"></span></span> IMDb {{ '%.1f'|format(movie.average_rating) }}/10 · {{ '{:,}'.format(movie.vote_count) }} votes</div>
+                  {% endif %}
+                  {% if movie.notable_awards %}
+                    <p class="movie-card__recognition">{{ movie.notable_awards | join(' · ') }}</p>
+                  {% endif %}
+                  {% set synopsis = movie.get('overview') or movie.get('synopsis') %}
+                  {% if synopsis and not synopsis.startswith('IMDb rating ') and not ('), a ' in synopsis and synopsis.endswith(' movie.')) %}<p class="movie-card__synopsis">{{ synopsis }}</p>{% endif %}
+                  {% if movie.get('poster_source_url') %}<a class="movie-card__poster-credit" href="{{ movie.poster_source_url }}" target="_blank" rel="noopener noreferrer" data-i18n="commonsCredit">Poster image source: Wikimedia Commons</a>{% endif %}
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty-state">
+            <svg class="icon empty-state__reel"><use href="#icon-film-reel"></use></svg>
+            <strong data-i18n="emptyStateTitle">No movies found.</strong>
+            <span data-i18n="emptyStateBody">Try a different search or choose another genre.</span>
+          </div>
+        {% endif %}
+        {% if total_pages > 1 and (searched or movies) %}
+          <nav class="pagination pagination--bottom" aria-label="Movie pages" data-i18n-aria="paginationLabel">
+            <button type="button" class="pagination__button" data-page-url="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number - 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="previousPage" {% if page_number <= 1 %}disabled{% endif %}>Previous</button>
+            <form class="page-jump" data-pagination-form method="get" action="{{ url_for('index') }}">
+              <input type="hidden" name="q" value="{{ query }}" />
+              {% for genre in selected_genres %}<input type="hidden" name="genre" value="{{ genre }}" />{% endfor %}
+              {% for award in selected_awards %}<input type="hidden" name="awards" value="{{ award }}" />{% endfor %}
+              <input type="hidden" name="per_page" value="{{ per_page }}" />
+              <input type="hidden" name="nationality" value="{{ selected_nationality }}" />
+              <input type="hidden" name="debug" value="{{ '1' if debug_enabled else '' }}" />
+              {% for dropped_filter in dropped %}<input type="hidden" name="drop" value="{{ dropped_filter }}" />{% endfor %}
+              <label for="page-bottom">Page</label>
+              <input id="page-bottom" class="page-jump__input" name="page" type="number" min="1" max="{{ total_pages }}" value="{{ page_number }}" inputmode="numeric" aria-label="Jump to page" />
+              <span>of {{ total_pages }}</span>
+            </form>
+            <button type="button" class="pagination__button" data-page-url="{{ url_for('index', q=query, genre=selected_genres, awards=selected_awards, per_page=per_page, page=page_number + 1, debug='1' if debug_enabled else '', drop=dropped) }}" data-i18n="nextPage" {% if page_number >= total_pages %}disabled{% endif %}>Next</button>
+          </nav>
+        {% endif %}
+    </section>
+
   </main>
-  <script src="{{ url_for('static', filename='js/minimal-controls.js') }}" defer></script>
+
+  <footer class="footer">
+    <p>MOVIE_FINDER_GROUP4</p>
+  </footer>
+  <aside class="movie-drawer" id="movie-drawer" role="dialog" aria-modal="true" aria-labelledby="movie-drawer-title" hidden>
+    <button type="button" class="movie-drawer__close" data-close-drawer aria-label="Close movie details" title="Close"><svg class="icon"><use href="#icon-close"></use></svg></button>
+    <img class="movie-drawer__poster" alt="" hidden />
+    <p class="movie-drawer__year"></p>
+    <h2 id="movie-drawer-title" class="movie-drawer__title"></h2>
+    <section><h3>Synopsis</h3><p class="movie-drawer__synopsis"></p></section>
+    <section class="movie-drawer__cast-section" hidden><h3>Cast</h3><ul class="movie-drawer__cast"></ul></section>
+    <button type="button" class="movie-drawer__similar" data-more-like-this>More like this</button>
+    <section class="movie-drawer__similar-results" aria-live="polite" hidden><h3>Related movies</h3><ul></ul></section>
+  </aside>
+  <div class="movie-modal" id="movie-modal" hidden>
+    <div class="movie-modal__backdrop" data-modal-backdrop></div>
+    <section class="movie-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="movie-modal-title" tabindex="-1">
+      <button type="button" class="movie-modal__close" data-modal-close aria-label="Close movie details" title="Close"><svg class="icon"><use href="#icon-close"></use></svg></button>
+      <div class="movie-modal__hero">
+        <img class="movie-modal__hero-image" alt="" />
+        <div class="movie-modal__hero-copy"><h2 id="movie-modal-title"></h2></div>
+      </div>
+      <div class="movie-modal__body">
+        <div class="movie-modal__actions">
+          <a class="movie-modal__source" target="_blank" rel="noopener noreferrer" hidden>View on IMDb</a>
+          <button type="button" class="movie-modal__feedback" data-modal-feedback="1" aria-label="Relevant" title="Relevant"><svg class="icon"><use href="#icon-thumbs-up"></use></svg></button>
+          <button type="button" class="movie-modal__feedback" data-modal-feedback="0" aria-label="Not relevant" title="Not relevant"><svg class="icon"><use href="#icon-thumbs-down"></use></svg></button>
+        </div>
+        <div class="movie-modal__columns">
+          <div class="movie-modal__primary-info">
+            <div class="movie-modal__badges"></div>
+            <p class="movie-modal__descriptors" hidden></p>
+            <h3 class="movie-modal__description-label" data-movie-description-label hidden>Description</h3>
+            <p class="movie-modal__synopsis" hidden></p>
+          </div>
+          <div class="movie-modal__details">
+            <p class="movie-modal__detail-row" data-modal-cast-row hidden><span>Cast:</span><span class="movie-modal__cast-values"></span><button type="button" class="movie-modal__more" data-cast-more hidden>more</button></p>
+            <p class="movie-modal__detail-row" data-modal-genres-row hidden><span>Genres:</span><span class="movie-modal__genre-values"></span></p>
+            <p class="movie-modal__detail-row" data-modal-moods-row hidden><span>This movie is:</span><span class="movie-modal__mood-values"></span></p>
+          </div>
+        </div>
+        <section class="movie-modal__related" aria-labelledby="movie-modal-related-title" hidden>
+          <h3 id="movie-modal-related-title">More like this</h3>
+          <div class="movie-modal__related-list"></div>
+        </section>
+      </div>
+    </section>
+  </div>
+  <div class="compare-modal" id="compare-modal" hidden>
+    <div class="compare-modal__backdrop" data-compare-backdrop></div>
+    <section class="compare-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="compare-modal-title" tabindex="-1">
+      <button type="button" class="compare-modal__close" data-compare-close aria-label="Close comparison" title="Close"><svg class="icon"><use href="#icon-close"></use></svg></button>
+      <h2 id="compare-modal-title">Compare movies</h2>
+      <div class="compare-modal__content" data-comparison-content></div>
+    </section>
+  </div>
+  <div class="onboarding-layer" data-onboarding-layer hidden>
+    <section class="onboarding-tooltip" role="dialog" aria-modal="true" aria-labelledby="onboarding-title" tabindex="-1">
+      <button type="button" class="support-panel__close" data-onboarding-close aria-label="Dismiss search tip" title="Dismiss search tip"><svg class="icon"><use href="#icon-close"></use></svg></button>
+      <h2 id="onboarding-title">Try typing a sentence, not just a keyword.</h2>
+      <div class="support-examples">
+        <button type="button" data-onboarding-example="I want something suspenseful but not horror, preferably a mystery under two hours.">Suspenseful mystery, not horror</button>
+        <button type="button" data-onboarding-example="Something dark and suspenseful, not a comedy, at least 100 minutes but not longer than 150.">Dark suspense, 100 to 150 minutes</button>
+        <button type="button" data-onboarding-example="Gusto ko ng suspenseful na mystery movie, less than 130 minutes, walang horror.">Taglish mystery, walang horror</button>
+      </div>
+    </section>
+  </div>
+  <div class="support-drawer" id="help-drawer" hidden>
+    <div class="support-drawer__backdrop" data-support-backdrop></div>
+    <section class="support-drawer__dialog" role="dialog" aria-modal="true" aria-labelledby="help-drawer-title" tabindex="-1">
+      <button type="button" class="support-panel__close" data-support-close aria-label="Close help and examples" title="Close"><svg class="icon"><use href="#icon-close"></use></svg></button>
+      <h2 id="help-drawer-title">Help and examples</h2>
+      <p>The local parser recognizes these kinds of requests:</p>
+      <div class="help-examples">
+        <section><h3>Negation</h3><button type="button" data-example-query="A suspenseful mystery, not horror, under 140 minutes, from after 2010.">A suspenseful mystery, not horror, under 140 minutes, from after 2010.</button></section>
+        <section><h3>Runtime</h3><button type="button" data-example-query="under 90 minutes, comedy, nothing else matters">under 90 minutes, comedy, nothing else matters</button></section>
+        <section><h3>Release years</h3><button type="button" data-example-query="comedy in the 90s">comedy in the 90s</button></section>
+        <section><h3>Typos</h3><button type="button" data-example-query="hrror movies">hrror movies</button></section>
+        <section><h3>Taglish</h3><button type="button" data-example-query="Gusto ko ng suspenseful na mystery movie, less than 130 minutes, walang horror.">Gusto ko ng suspenseful na mystery movie, less than 130 minutes, walang horror.</button></section>
+      </div>
+    </section>
+  </div>
+  <div class="support-drawer" id="about-drawer" hidden>
+    <div class="support-drawer__backdrop" data-support-backdrop></div>
+    <section class="support-drawer__dialog" role="dialog" aria-modal="true" aria-labelledby="about-drawer-title" tabindex="-1">
+      <button type="button" class="support-panel__close" data-support-close aria-label="Close data notes" title="Close"><svg class="icon"><use href="#icon-close"></use></svg></button>
+      <h2 id="about-drawer-title">About this data</h2>
+      <p class="about-data__total">Deployment audit: <strong>1,065 records</strong></p>
+      <h3>Field coverage</h3>
+      <dl class="about-data__coverage">
+        <div><dt>Synopsis (any)</dt><dd>1,065 · 100.0%</dd></div>
+        <div><dt>Real-plot synopsis (not template)</dt><dd>65 · 6.1%</dd></div>
+        <div><dt><code>original_title</code></dt><dd>1,000 · 93.9%</dd></div>
+        <div><dt><code>original_title differs from title</code></dt><dd>55 · 5.2%</dd></div>
+        <div><dt>IMDb ID</dt><dd>1,000 · 93.9%</dd></div>
+        <div><dt>IMDb keywords</dt><dd>1,065 · 100.0%</dd></div>
+        <div><dt>IMDb release regions</dt><dd>1,000 · 93.9%</dd></div>
+        <div><dt>IMDb adult flag</dt><dd>1,000 · 93.9%</dd></div>
+        <div><dt>Runtime</dt><dd>1,065 · 100.0%</dd></div>
+        <div><dt>Release year</dt><dd>1,065 · 100.0%</dd></div>
+        <div><dt>Genres</dt><dd>1,065 · 100.0%</dd></div>
+        <div><dt>Rating</dt><dd>1,000 · 93.9%</dd></div>
+        <div><dt>Themes</dt><dd>65 · 6.1%</dd></div>
+        <div><dt>Mood tags</dt><dd>65 · 6.1%</dd></div>
+        <div><dt>Content descriptors</dt><dd>55 · 5.2%</dd></div>
+        <div><dt>Cast</dt><dd>0 · 0.0%</dd></div>
+        <div><dt>Poster</dt><dd>4 · 0.4%</dd></div>
+        <div><dt>Certification</dt><dd>0 · 0.0%</dd></div>
+        <div><dt>Production countries</dt><dd>1,054 · 99.0%</dd></div>
+        <div><dt>Original language</dt><dd>0 · 0.0%</dd></div>
+      </dl>
+      <h3>Audit checks</h3>
+      <p>The audit checks duplicate IDs, IMDb IDs, and normalized title/year pairs: all 0. It checks for a title, a year from 1880–2100, runtime from 1–600 when present, non-empty genres, and ratings from 0–10: 0 malformed records.</p>
+      <p>IMDb synopsis templates are not counted as real plots. No plot, cast, or content-descriptor metadata has been fabricated to fill gaps.</p>
+      <h3>Known limits</h3>
+      <p>Plots, cast, and content descriptors are limited to locally imported/enriched fields. TMDB key configured: no; enrichment is opt-in and inactive without <code>TMDB_API_KEY</code>.</p>
+    </section>
+  </div>
+  <button type="button" class="back-to-top" aria-label="Back to top" title="Back to top" hidden><svg class="icon"><use href="#icon-chevron-up"></use></svg></button>
+
+  <script src="{{ url_for('static', filename='js/smart-search.js', v='ui-upgrades-6') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/poster-fallback.js', v='ui-upgrades-5') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/ui-preferences.js', v='ui-upgrades-5') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/movie-preview.js', v='movie-preview-2') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/query-insights.js', v='query-insights-2') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/home-discovery.js', v='home-discovery-1') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/result-enhancements.js', v='result-enhancements-1') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/visual-layer.js', v='visual-layer-1') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/support-panels.js', v='support-panels-1') }}" defer></script>
 </body>
 </html>
