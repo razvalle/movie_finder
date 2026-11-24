@@ -15,6 +15,7 @@ pretrained model or embedding is used anywhere in this file.
 """
 
 import hashlib
+import logging
 import math
 import pickle
 import re
@@ -24,6 +25,7 @@ from .similarity import vector_norm
 
 WORD_RE = re.compile(r"[^a-z0-9\s-]")
 TOKENIZER_VERSION = 2
+_LOGGER = logging.getLogger(__name__)
 
 
 def simple_word_tokens(text):
@@ -129,17 +131,34 @@ def load_or_build_tfidf_model(movies, cache_path, source_path=None):
         try:
             with cache_path.open("rb") as stream:
                 cached = pickle.load(stream)
-            if cached.get("fingerprint") == fingerprint:
-                return cached["model"]
-        except (OSError, EOFError, pickle.PickleError, KeyError, ValueError):
-            pass
+            if isinstance(cached, dict) and cached.get("fingerprint") == fingerprint:
+                cached_model = cached.get("model")
+                if (
+                    isinstance(cached_model, dict)
+                    and isinstance(cached_model.get("idf"), dict)
+                    and isinstance(cached_model.get("vectors"), dict)
+                    and isinstance(cached_model.get("norms"), dict)
+                ):
+                    return cached_model
+                _LOGGER.warning("TF-IDF cache has an invalid model shape; rebuilding it locally.")
+            else:
+                _LOGGER.info("TF-IDF cache is stale; rebuilding it locally.")
+        except (OSError, EOFError, pickle.PickleError, KeyError, ValueError) as error:
+            _LOGGER.warning("TF-IDF cache cannot be loaded; rebuilding it locally: %s", error)
 
     model = build_tfidf_model(movies)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = cache_path.with_suffix(".tmp")
-    with temporary_path.open("wb") as stream:
-        pickle.dump({"fingerprint": fingerprint, "model": model}, stream, protocol=pickle.HIGHEST_PROTOCOL)
-    temporary_path.replace(cache_path)
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with temporary_path.open("wb") as stream:
+            pickle.dump({"fingerprint": fingerprint, "model": model}, stream, protocol=pickle.HIGHEST_PROTOCOL)
+        temporary_path.replace(cache_path)
+    except OSError as error:
+        _LOGGER.warning("TF-IDF cache could not be saved; using the in-memory model: %s", error)
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            _LOGGER.warning("Could not remove the incomplete TF-IDF cache file.")
     return model
 
 

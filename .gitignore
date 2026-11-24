@@ -11,6 +11,7 @@ data/imdb_movies.json
 data/tfidf_cache.pkl
 data/imdb_movies.tmdb_progress.json
 data/movie_public_progress.json
+data/search_quality.jsonl*
 
 # Local poster assets and generated reports
 static/images/*

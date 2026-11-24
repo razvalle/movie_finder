@@ -39,7 +39,7 @@ def explain_match(movie, preferences, breakdown):
             reasons.append({"ok": False, "text": f"{title_case(t)} theme not found"})
 
     if breakdown["keyword"] is not None and breakdown["keyword"] > 0.08:
-        reasons.append({"ok": True, "text": "Synopsis closely matches your description"})
+        reasons.append({"ok": True, "text": "Searchable movie metadata overlaps with your description"})
 
     if breakdown["runtime"] is not None:
         rt = preferences["runtime"]

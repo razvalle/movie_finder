@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tests.relevance_benchmark import generate_queries, score, split_of, violates
+from tests.relevance_benchmark import _ResultCards, generate_queries, score, split_of, violates
 
 
 def catalog(n=200):
@@ -19,6 +19,16 @@ def catalog(n=200):
 
 
 class BenchmarkGeneratorTests(unittest.TestCase):
+    def test_result_parser_uses_the_rendered_movie_id_for_duplicate_titles(self):
+        parser = _ResultCards()
+        parser.feed(
+            '<article class="movie-card">'
+            '<form><input type="hidden" name="movie_id" value="2019"></form>'
+            '<h3 class="movie-card__title">Aladdin</h3>'
+            '</article>'
+        )
+        self.assertEqual(parser.cards[0]["id"], "2019")
+
     def test_splits_are_disjoint_and_deterministic(self):
         movies = catalog()
         tune = generate_queries(movies, "tune", count=30)
@@ -43,6 +53,22 @@ class BenchmarkGeneratorTests(unittest.TestCase):
         self.assertEqual(metrics["unverified_result_rate"], 0.5)
         self.assertEqual(metrics["unverified_hard_constraint_violation_rate"], 1.0)
         self.assertEqual(score([q], {"x": []}, movies)["empty_result_rate"], 1.0)
+
+    def test_keyword_miss_is_not_reported_as_a_hard_constraint_violation(self):
+        movies = {
+            1: {
+                "id": 1, "title": "Harbor Film", "synopsis": "",
+                "keywords": [], "genres": ["drama"], "release_year": 2000, "runtime": 90,
+            },
+        }
+        query = {
+            "query": "drama movie about unlisted",
+            "source_id": 1,
+            "constraints": {"genres": ["drama"], "keyword": "unlisted"},
+        }
+        metrics = score([query], {"drama movie about unlisted": [1]}, movies)
+        self.assertEqual(metrics["hard_constraint_violation_rate"], 0.0)
+        self.assertEqual(metrics["keyword_miss_rate"], 1.0)
 
 
 if __name__ == "__main__":

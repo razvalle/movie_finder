@@ -168,13 +168,24 @@ def detect_people_and_language(normalized_text):
         if match:
             people.append(match.group(1).strip())
     languages = []
-    match = re.search(r"\b([a-z]+)\s+(?:language|language movies|films)\b", normalized_text)
-    if match:
+    match = re.search(
+        r"\b([a-z]+)\s+(?:language(?:\s+(?:movies?|films?))?|films?)\b",
+        normalized_text,
+    )
+    if match and _is_language_name(match.group(1)):
         languages.append(match.group(1))
     match = re.search(r"\b(?:in|sa)\s+([a-z]+)\s+(?:movies?|films?|cinema)\b", normalized_text)
-    if match:
+    if match and _is_language_name(match.group(1)):
         languages.append(match.group(1))
     return people, languages
+
+
+def _is_language_name(value):
+    try:
+        pycountry.languages.lookup(value)
+    except LookupError:
+        return False
+    return True
 
 
 def detect_cast_gender_constraint(normalized_text):

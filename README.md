@@ -117,12 +117,14 @@ and JSON report show whether a key is configured at audit time.
 The standalone relevance benchmark is a synthetic prioritization signal, not
 real user feedback. Its 100 queries per split cover genre, decade, runtime and
 a keyword derived from the source title; they do not test cast or content
-descriptor requests. The latest run reported recall@20 of 0.760 on the tuning
-split and 0.670 on held-out; hard-constraint violation rates were 0.1% and
-3.8%, respectively. Held-out keyword violations were 3.5%, decade violations
-0.3%, and genre violations 0.1%. This supports prioritizing better descriptive
-metadata and lexical matching, but cannot justify prioritizing cast or content
-descriptors, which its templates never ask for. Run
+descriptor requests. The latest run reported recall@20 of 0.770 on the tuning
+split and 0.690 on held-out, with no genre, decade, or runtime violations.
+Keyword misses were 2.2% and 2.4%, respectively; these are soft relevance
+misses, not hard-filter violations. Earlier reports combined keyword misses
+with hard-filter violations and should not be compared to the separated metric.
+This supports prioritizing better descriptive metadata and lexical matching,
+but cannot justify prioritizing cast or content descriptors, which its
+templates never ask for. Run
 `python tests/relevance_benchmark.py --split tune` for tuning metrics and
 `python tests/relevance_benchmark.py` for held-out reporting; do not tune on
 the held-out split.
@@ -205,10 +207,86 @@ against available catalog metadata and explains satisfied, contradicted, and
 unverifiable requirements. Weighted scoring ranks the candidates. Stopwords and
 negated concepts are removed from retrieval terms. Search is deterministic and
 does not make external AI or embedding calls. If no useful retrieval signal is
-available, the app returns no close matches instead of substituting popular
-titles. Results remain labeled as closest matches when the catalog cannot verify
-all requirements. The query cache and per-client search rate limit are local to
-each app worker.
+available, search falls back through direct lexical/fuzzy and title matching,
+local TF-IDF similarity, and finally top-rated browsing within the already
+filtered candidate pool. Fallback results are labeled closest, never Exact, and
+hard filters are not relaxed. Results are labeled Exact, Close, or Related
+according to the verified constraints and evidence tier. The query cache and
+per-client search rate limit are local to each app worker.
+
+Compound terms are normalized from catalog and synonym vocabulary. Phrase
+evidence outranks weak evidence from a compound's final term; leading modifiers
+are not counted alone. Title-only evidence is weaker than synopsis or tag
+evidence. An "Exact match" requires verified constraints, strong evidence
+for every parsed search term, and a displayed score of at least 80%; otherwise
+the result remains a closest match.
+Final score ties are broken by evidence strength, rating, vote count, normalized
+title, then catalog ID for stable ordering.
+
+### Search resilience and diagnostics
+
+Search input is capped at 500 characters and page/filter parameters are bounded.
+Each pipeline stage has a simpler fallback; filtering and result self-checks
+fail closed so an error cannot bypass exclusions, runtime, year, genre, country,
+recognition, or cast constraints. Search has a cooperative three-second stage
+budget. A slow stage is replaced with a partial, lower-confidence result path;
+the budget cannot interrupt a single synchronous operation mid-call.
+
+Each request appends one structured JSON record to
+`data/search_quality.jsonl`. The local log rotates at 2 MiB with three backups.
+It contains stage candidate counts, elapsed time, score/tier summaries, fallback
+and zero-result flags, and sanitized query text. Common email, phone, IP, and
+multi-word name patterns are redacted; request IPs are not recorded. Search
+errors are summarized for manual review only:
+
+```powershell
+python search_report.py
+```
+
+The generated-query regression harness uses an independent catalog scan and
+reports tuning and held-out results separately. Run the full harness or either
+split with:
+
+```powershell
+python tests/search_trial_harness.py
+python tests/search_trial_harness.py --split tuning
+python tests/search_trial_harness.py --split held-out
+```
+
+It checks input boundaries, filter invariants, score/tier consistency,
+determinism, pagination, fallback behavior, offline operation, and whether
+topic results have direct phrase or catalog-term evidence. Topic seeds are
+catalog keyword, theme, or genre phrases with direct evidence in at least
+three movies; expected IDs are found by an independent catalog scan, not by
+calling the search route. A failed trial is recorded for review; the quality
+log is not used to learn or change search behavior.
+
+Topic concepts are expanded from synopsis, keyword, theme, and genre
+co-occurrence. Rebuild the versioned, reviewable table with:
+
+```powershell
+python data/build_concept_expansions.py
+```
+
+The builder records generated associations separately from hand-written
+synonym aliases, requires support in at least two catalog records, and stores
+catalog and synonym fingerprints. The app loads the table at startup; a missing
+or stale table disables expansion and keeps lexical search available. Generated
+terms together receive at most 0.30 total query weight, so they cannot outweigh
+a direct phrase. Exact results require every parsed constraint to be verified,
+strong phrase/theme/keyword evidence for each required term, and at least 80%.
+Close results have partial direct evidence. Related results require at least
+two distinct associated terms in non-title metadata; title-only evidence is
+weaker and cannot qualify by a single title word. Exclusions and other hard
+filters are applied before retrieval.
+
+`tests/topic_search_benchmark.py` independently scans catalog fields to build
+strong-evidence sets; its templated spacing, plural, typo, filler, and word-
+order variants are split by topic into tuning and held-out sets. Run
+`python tests/topic_search_benchmark.py --split tune` for tuning metrics and
+`python tests/topic_search_benchmark.py --split heldout` for held-out metrics.
+The benchmark does not use app results as its oracle; do not tune on held-out
+queries.
 
 The catalog used by this workspace's offline trials contains 1,065 records; the
 full IMDb import (`data/imdb_movies.json`) is not installed here. The compact
@@ -237,40 +315,61 @@ deterministic split is preserved when parameters change; ambiguous generated
 title fragments that conflict with an exact title after removing a leading
 article are excluded from the fragment set.
 
-Latest run: 5,018 trials over the 1,065-record compact catalog: 4,058 tuning
-trials passed (100%); 957/960 held-out trials passed (99.69%). The pre-fix
-baseline was 4,992 trials, with 90.27% tuning and 88.57% held-out pass rates.
-Because the generator was corrected to avoid ambiguous title-oracle collisions,
-the populations are not an exact paired comparison. The held-out baseline
-guard passed: recall@48 improved from 93.90% to 99.74%, and the hard-constraint
-violation rate fell from 15.73% to 0.64%. No code was tuned from held-out
-examples. The command returned a nonzero exit code because the three held-out
-trials below remain failures, even though the baseline guard passed.
+Latest run: 5,705 trials over the 1,065-record compact catalog. All 4,618
+tuning trials and all 1,087 held-out trials passed; the command exited
+successfully. Compared with the immediately preceding run, the three tuning
+failures were resolved: two came from the oracle conflating a noun with a
+different verb form, and one exposed a false exact label when a generic word
+was dropped from a supported phrase. The held-out baseline guard passed:
+recall@48 improved from 93.90% to 100%, and hard-constraint violations fell
+from 15.73% to 0%. The independent relevance benchmark remains unchanged:
+recall@20 is 77% on tuning and 69% on held-out, with no hard-constraint
+violations.
 
 | Metric | Tuning | Held-out | Overall |
 | --- | ---: | ---: | ---: |
-| Recall@48 | 100.00% | 99.74% | 99.95% |
-| Hard-constraint violation rate | 0.00% | 0.64% | 0.12% |
-| Empty-result rate | 1.80% | 1.88% | 1.81% |
-| False-exact rate | 0.00% | 0.86% | 0.16% |
+| Recall@48 | 100.00% | 100.00% | 100.00% |
+| Hard-constraint violation rate | 0.00% | 0.00% | 0.00% |
+| Empty-result rate | 0.41% | 0.37% | 0.40% |
+| False-exact rate | 0.00% | 0.00% | 0.00% |
 | Crashes / HTTP 5xx | 0 / 0 | 0 / 0 | 0 / 0 |
-| Latency p95 / p99 | 0.391 / 0.783 s | 0.345 / 0.702 s | 0.371 / 0.759 s |
+| Latency p95 / p99 | 0.611 / 0.832 s | 0.592 / 0.743 s | 0.607 / 0.808 s |
+
+For the independent strong-evidence topic oracle, the tuning split had 742
+topic trials and the held-out split had 172. Strong-evidence recall@48 was
+7.02% / 7.03%, precision@48 was 85.36% / 81.67%, and the identical-score tie
+rate was 72.81% / 71.86%, respectively. Neither split had an empty topic
+result. These topic metrics are separate from source-title recall above: the
+oracle counts all catalog records with direct phrase or associated-term
+evidence, so broad topics can have many expected records beyond the first page.
+
+Trial counts by category (all categories passed):
+
+| Category | Trials | Category | Trials |
+| --- | ---: | --- | ---: |
+| Title | 3,188 | Combined | 296 |
+| Synonym | 241 | Negation | 241 |
+| Typo | 209 | Filler | 186 |
+| Negation placement | 182 | Runtime number forms | 110 |
+| Similar-to | 100 | Title fragment | 94 |
+| Topic/filter combination | 94 | Spacing compound | 93 |
+| Spacing hyphen | 93 | Casing | 93 |
+| Plural | 93 | Filter combination | 80 |
+| Single year | 69 | Description | 65 |
+| Negation keyword | 60 | Country | 44 |
+| Single genre | 20 | Surprising input | 16 |
+| Word order | 12 | Single runtime | 12 |
+| Language mix | 5 | Recognition chip | 4 |
+| Decade number forms | 3 | Unsupported cast | 1 |
+| Unsupported certification | 1 | | |
 
 Pagination passed: pages were disjoint, covered the complete result set, and
 invalid or out-of-range page numbers fell back safely. Empty responses had a
-visible explanation or next step. The tuning split had no hard-constraint or
-false-exact violations; the nonzero held-out rates mean the strict zero-
-violation target is not yet met. The three held-out failures were not used for
-tuning:
-
-| Held-out query | Oracle expected | Actual | Failure stages |
-| --- | --- | --- | --- |
-| `the Suicide Squad` | movie ID `202` | movie ID `421` | hard filter, recall, false exact |
-| `Get Out under 105 minutes` | movie ID `9` | expected title absent from the returned page | hard filter, recall, false exact |
-| `romcom movies` | 20 catalog IDs | Toy Story, ID `18` | hard filter |
-
-The JSONL log contains the full expected and returned IDs, preferences, and
-stage details. Do not tune against these held-out cases.
+visible explanation or next step. All generated queries stayed offline, and
+the runtime deployment-parity checks confirmed the TF-IDF cache and concept
+table loaded from correctly cased paths without an API key or network access.
+The transient JSONL output records expected and returned IDs, preferences,
+stage counts, explanations, latency, and failures.
 
 Root causes fixed on the tuning set:
 
@@ -296,6 +395,10 @@ Root causes fixed on the tuning set:
   making stability comparisons invalid. IDs now include request parameters
   while the split remains unchanged; the repeated-request determinism check
   passes.
+- A fuzzy plural could normalize to a generic stop word and then be dropped,
+  reducing a supported multiword phrase to one requirement. Normalization now
+  retains that word only when catalog data supports the adjacent compound, so
+  the phrase is verified as a phrase rather than as one strong token.
 - The legacy examples treated “under N minutes” as inclusive. Their expected
   maximums now reflect the strict `< N` runtime rule; the legacy runner passes
   51/51 without changing runtime behavior.
@@ -578,8 +681,9 @@ the movie data or template.
    results.
 8. **Weighted scoring** — every remaining movie is scored 0-100%.
    Weights (genre 28%, mood 24%, theme 14%, keyword similarity 16%,
-   runtime 12%, release year 6%) are **re-normalized to only the
-   categories you actually mentioned** — so a query with no runtime
+   runtime 12%, release year 6%, source-aware query evidence 68%, and
+   lexical BM25/TF-IDF relevance 10%) are **re-normalized to only the
+   evidence categories active for that query** — so a query with no runtime
    constraint doesn't get penalized for movies of any length.
 9. **Explanation** — the score breakdown is converted into the
    check/cross reason list shown under each result.

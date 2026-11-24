@@ -264,7 +264,7 @@
           <h2 class="section-title" data-i18n="{{ 'recommendedMovies' if searched else 'allMovies' }}">{{ 'Recommended Movies' if searched else 'All Movies' }}</h2>
           <div class="results__controls">
             {% if query or selected_genres or selected_awards or searched %}
-              <span class="results__count" role="status" aria-live="polite" data-result-count="{{ result_count }}" data-result-kind="{{ 'exact' if 'exact' in result_count_label else 'closest' if result_count_label else 'browse' }}">{{ result_count_label or (result_count ~ ' match' ~ ('' if result_count == 1 else 'es')) }}</span>
+              <span class="results__count" role="status" aria-live="polite" data-result-count="{{ result_count }}" data-result-kind="{{ 'tiers' if searched else 'browse' }}" data-count-exact="{{ result_tier_counts.exact }}" data-count-close="{{ result_tier_counts.close }}" data-count-related="{{ result_tier_counts.related }}">{{ result_count_label or (result_count ~ ' match' ~ ('' if result_count == 1 else 'es')) }}</span>
             {% endif %}
             <div class="results__view-controls">
               <label class="sr-only" for="result-sort" data-i18n="sortResults">Sort results</label>
@@ -358,7 +358,7 @@
                     </div>
                   </div>
                   <div class="match-badges">
-                    <span class="match-badge match-badge--{{ r.match_level }}" data-i18n="{{ 'exactMatch' if r.match_level == 'full' else 'closestMatch' }}">{{ r.match_badge }}</span>
+                    <span class="match-badge match-badge--{{ r.match_level }}" data-i18n="{{ {'exact': 'exactMatch', 'close': 'closestMatch', 'related': 'relatedMatch'}[r.match_tier] }}">{{ r.match_badge }}</span>
                     {% if r.show_unverified_badge %}<span class="match-badge match-badge--unverified" data-i18n="unverified">Unverified</span>{% endif %}
                   </div>
                   <div class="movie-card__title-row"><h3 class="movie-card__title">{{ r.movie.title }}</h3>{% if r.movie.get('release_year') %}<span class="movie-card__year">({{ r.movie.release_year }})</span>{% endif %}</div>

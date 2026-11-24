@@ -41,6 +41,8 @@ BASE_WEIGHTS = {
     "keyword": 0.16,  # TF-IDF/cosine similarity against free-text description
     "runtime": 0.12,
     "release_year": 0.06,
+    "evidence": 0.68,
+    "search": 0.10,
 }
 
 MIN_DESCRIPTION_SIMILARITY = 0.15
@@ -63,7 +65,8 @@ def _contains_phrase(text, phrase):
 
 @lru_cache(maxsize=32768)
 def _phrase_tokens(text):
-    normalized = unicodedata.normalize("NFKC", str(text)).casefold()
+    normalized = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", str(text)).casefold())
+    normalized = "".join(char for char in normalized if not unicodedata.combining(char))
     return tuple(re.findall(r"[^\W_]+", normalized, flags=re.UNICODE))
 
 
@@ -177,7 +180,10 @@ def is_excluded(movie, preferences):
     return False
 
 
-def score_movie(movie, preferences, tfidf_model, query_vector=None, query_norm=None):
+def score_movie(
+    movie, preferences, tfidf_model, query_vector=None, query_norm=None,
+    query_evidence=None, relevance_score=None,
+):
     """
     Scores a single movie against extracted preferences.
     Returns {"percent": int, "breakdown": {...}} where breakdown holds
@@ -189,6 +195,10 @@ def score_movie(movie, preferences, tfidf_model, query_vector=None, query_norm=N
     theme_result = overlap_fraction(preferences["themes"], movie["themes"])
     runtime_score = score_runtime(preferences["runtime"], movie["runtime"])
     year_score = score_release_year(preferences["release_year"], movie["release_year"])
+    has_query_evidence = bool(
+        query_evidence
+        and (query_evidence.get("details") or query_evidence.get("associated_details"))
+    )
 
     keyword_score = None
     if preferences["free_text_keywords"]:
@@ -196,6 +206,17 @@ def score_movie(movie, preferences, tfidf_model, query_vector=None, query_norm=N
         movie_vec = tfidf_model["vectors"].get(movie["id"], {})
         movie_norm = tfidf_model.get("norms", {}).get(movie["id"])
         keyword_score = cosine_similarity(query_vec, movie_vec, query_norm, movie_norm)
+        if has_query_evidence:
+            keyword_score *= query_evidence.get("strength", 0.0)
+
+    evidence_score = None
+    search_score = None
+    if has_query_evidence:
+        evidence_score = query_evidence.get("score", 0.0)
+    if relevance_score is not None and relevance_score > 0:
+        search_score = relevance_score / (1 + relevance_score)
+        if has_query_evidence:
+            search_score *= query_evidence.get("strength", 0.0)
 
     factors = {
         "genre": genre_result["fraction"] if genre_result else None,
@@ -204,16 +225,15 @@ def score_movie(movie, preferences, tfidf_model, query_vector=None, query_norm=N
         "keyword": keyword_score,
         "runtime": runtime_score,
         "release_year": year_score,
+        "evidence": evidence_score,
+        "search": search_score,
     }
 
     active_factors = {k: v for k, v in factors.items() if v is not None}
     weight_sum = sum(BASE_WEIGHTS[k] for k in active_factors)
 
     if not active_factors:
-        # Free-text query didn't match any structured category or
-        # keyword -- fall back to a small baseline so results still
-        # render, ranked by whatever weak similarity exists.
-        percent = 20
+        percent = 0
     else:
         weighted = sum(v * (BASE_WEIGHTS[k] / weight_sum) for k, v in active_factors.items())
         percent = round(weighted * 100)
@@ -227,11 +247,16 @@ def score_movie(movie, preferences, tfidf_model, query_vector=None, query_norm=N
             "keyword": keyword_score,
             "runtime": runtime_score,
             "release_year": year_score,
+            "evidence": evidence_score,
+            "search": search_score,
         },
     }
 
 
-def rank_movies(movies, preferences, tfidf_model):
+def rank_movies(
+    movies, preferences, tfidf_model, evidence_by_id=None,
+    relevance_by_id=None, apply_filters=True,
+):
     """
     Filters, scores, and ranks the full dataset for a preference dict.
     Returns {"results": [...], "excluded_count": int} where results is
@@ -255,7 +280,7 @@ def rank_movies(movies, preferences, tfidf_model):
         # A named genre is an explicit catalog filter. Descriptive moods and
         # themes are alternatives: "grieving family dealing with loss" can
         # match either the sad mood or the grief theme without over-filtering.
-        if preferences["genres"] and not genre_matches:
+        if apply_filters and preferences["genres"] and not genre_matches:
             excluded_count += 1
             continue
         available_mood_match = mood_matches if mood_metadata_available else False
@@ -264,14 +289,19 @@ def rank_movies(movies, preferences, tfidf_model):
             (preferences["moods"] and mood_metadata_available)
             or (preferences["themes"] and theme_metadata_available)
         )
-        if not preferences["genres"] and has_available_descriptive_filter:
+        if apply_filters and not preferences["genres"] and has_available_descriptive_filter:
             if not (available_mood_match or available_theme_match):
                 excluded_count += 1
                 continue
-        if is_excluded(movie, preferences):
+        if apply_filters and is_excluded(movie, preferences):
             excluded_count += 1
             continue
-        outcome = score_movie(movie, preferences, tfidf_model, query_vector, query_norm)
+        movie_id = movie["id"]
+        outcome = score_movie(
+            movie, preferences, tfidf_model, query_vector, query_norm,
+            (evidence_by_id or {}).get(str(movie_id), (evidence_by_id or {}).get(movie_id)),
+            (relevance_by_id or {}).get(str(movie_id), (relevance_by_id or {}).get(movie_id)),
+        )
 
         # Unknown-only text must not fall back to showing the whole catalog.
         # When a structured preference exists, unknown words are harmless
@@ -281,11 +311,12 @@ def rank_movies(movies, preferences, tfidf_model):
             preferences["runtime"]["min"], preferences["runtime"]["max"],
             preferences["runtime"]["target"], preferences["release_year"],
         ))
-        if preferences["free_text_keywords"] and not (
+        if apply_filters and preferences["free_text_keywords"] and not (
             preferences["genres"] or preferences["moods"] or preferences["themes"]
         ):
             keyword_score = outcome["breakdown"]["keyword"]
-            if keyword_score is None or keyword_score < MIN_DESCRIPTION_SIMILARITY:
+            evidence_score = outcome["breakdown"]["evidence"] or 0
+            if max(keyword_score or 0, evidence_score) < MIN_DESCRIPTION_SIMILARITY:
                 excluded_count += 1
                 continue
         scored.append({"movie": movie, "percent": outcome["percent"], "breakdown": outcome["breakdown"]})

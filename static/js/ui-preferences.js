@@ -16,7 +16,8 @@
       sortMatch: "Best match", sortPopular: "Most popular", sortRating: "Highest rated", sortNewest: "Newest",
       allLanguages: "All movie languages", recommendedMovies: "Recommended Movies", allMovies: "All Movies",
       countExact: "{count} exact matches", countClosest: "{count} closest matches", countBrowse: "{count} matches",
-      exactMatch: "Exact match", closestMatch: "Closest match", unverified: "Unverified",
+      countTiers: "{exact} exact, {close} close, {related} related",
+      exactMatch: "Exact match", closeMatch: "Close match", relatedMatch: "Related match", closestMatch: "Closest match", unverified: "Unverified",
       partialMessage: "I couldn't find an exact match, but here are some close options. Some details cannot be confirmed from this catalog.",
       emptyMessage: "I couldn't find a close fit. Try refining your search with a genre, mood, actor, or short plot clue.",
       exactMessage: "I found movies that fit what you asked for.", filterDataMessage: "This catalog doesn't include data for that language yet, so I can't filter by it. Showing all available movies instead.",
@@ -51,7 +52,8 @@
       sortMatch: "Mejor coincidencia", sortPopular: "Más populares", sortRating: "Mejor puntuación", sortNewest: "Más recientes",
       allLanguages: "Todos los idiomas de películas", recommendedMovies: "Películas recomendadas", allMovies: "Todas las películas",
       countExact: "{count} coincidencias exactas", countClosest: "{count} opciones cercanas", countBrowse: "{count} películas",
-      exactMatch: "Coincidencia exacta", closestMatch: "Opción cercana", unverified: "Sin verificar",
+      countTiers: "{exact} exactas, {close} cercanas, {related} relacionadas",
+      exactMatch: "Coincidencia exacta", closeMatch: "Opción cercana", relatedMatch: "Opción relacionada", closestMatch: "Opción cercana", unverified: "Sin verificar",
       partialMessage: "No encontré una coincidencia exacta, pero aquí tienes opciones cercanas. No se pueden confirmar algunos detalles con este catálogo.",
       emptyMessage: "No encontré una opción cercana. Prueba a ajustar la búsqueda con un género, estado de ánimo, actor o una pista breve de la trama.",
       exactMessage: "Encontré películas que coinciden con lo que pediste.", filterDataMessage: "Este catálogo aún no incluye datos de ese idioma, así que no puedo filtrar por él. Muestro todas las películas disponibles.",
@@ -86,7 +88,8 @@
       sortMatch: "Pinakamahusay na tugma", sortPopular: "Pinakasikat", sortRating: "Pinakamataas ang rating", sortNewest: "Pinakabago",
       allLanguages: "Lahat ng wika ng pelikula", recommendedMovies: "Mga inirerekomendang pelikula", allMovies: "Lahat ng pelikula",
       countExact: "{count} eksaktong tugma", countClosest: "{count} pinakamalapit na pelikula", countBrowse: "{count} pelikula",
-      exactMatch: "Eksaktong tugma", closestMatch: "Pinakamalapit", unverified: "Hindi pa napatutunayan",
+      countTiers: "{exact} eksakto, {close} malapit, {related} kaugnay",
+      exactMatch: "Eksaktong tugma", closeMatch: "Malapit na tugma", relatedMatch: "Kaugnay na tugma", closestMatch: "Pinakamalapit", unverified: "Hindi pa napatutunayan",
       partialMessage: "Walang eksaktong tugma, pero may malalapit na pelikula. May mga detalyeng hindi makumpirma sa katalogong ito.",
       emptyMessage: "Walang malapit na tugma. Subukan ang genre, mood, artista, o maikling pahiwatig sa kuwento.",
       exactMessage: "May nahanap akong mga pelikulang tugma sa hiniling mo.", filterDataMessage: "Wala pang datos ang katalogo para sa wikang ito. Ipinapakita ko muna ang lahat ng pelikulang mayroon.",
@@ -116,7 +119,9 @@
       genreLabel: "Genre", allGenres: "Tous les genres", recognitionLabel: "Distinctions", allFilms: "Tous les films",
       awardWinners: "Films primés", perPageLabel: "Par page", allLanguages: "Toutes les langues des films",
       recommendedMovies: "Films recommandés", allMovies: "Tous les films", countExact: "{count} correspondances exactes",
-      countClosest: "{count} options proches", countBrowse: "{count} films", exactMatch: "Correspondance exacte",
+      countClosest: "{count} options proches", countBrowse: "{count} films",
+      countTiers: "{exact} exactes, {close} proches, {related} associées",
+      exactMatch: "Correspondance exacte", closeMatch: "Correspondance proche", relatedMatch: "Correspondance associée",
       closestMatch: "Option proche", unverified: "Non vérifié", partialMessage: "Aucune correspondance exacte, mais voici des options proches. Certains détails ne sont pas vérifiables dans ce catalogue.",
       emptyMessage: "Aucun résultat proche. Essayez un genre, une ambiance, un acteur ou un bref indice d’intrigue.",
       exactMessage: "J’ai trouvé des films qui correspondent à votre demande.", filterDataMessage: "Le catalogue ne contient pas encore de données pour cette langue. Toutes les langues disponibles sont affichées.",
@@ -138,7 +143,9 @@
       findButton: "Filme suchen", genreLabel: "Genre", allGenres: "Alle Genres", recognitionLabel: "Auszeichnungen", allFilms: "Alle Filme",
       awardWinners: "Wichtige Preisträger", perPageLabel: "Pro Seite", allLanguages: "Alle Filmsprachen",
       recommendedMovies: "Filmempfehlungen", allMovies: "Alle Filme", countExact: "{count} genaue Treffer", countClosest: "{count} ähnliche Treffer",
-      countBrowse: "{count} Treffer", exactMatch: "Genaue Übereinstimmung", closestMatch: "Ähnliche Option", unverified: "Nicht bestätigt",
+      countBrowse: "{count} Treffer", countTiers: "{exact} genau, {close} nahe, {related} thematisch",
+      exactMatch: "Genaue Übereinstimmung", closeMatch: "Nahe Übereinstimmung", relatedMatch: "Thematisch passend",
+      closestMatch: "Ähnliche Option", unverified: "Nicht bestätigt",
       partialMessage: "Kein genauer Treffer, aber hier sind ähnliche Filme. Einige Details lassen sich mit diesem Katalog nicht bestätigen.",
       emptyMessage: "Keine passenden Filme gefunden. Probiere ein Genre, eine Stimmung, einen Schauspieler oder einen kurzen Handlungshinweis.",
       exactMessage: "Ich habe Filme gefunden, die zu deiner Suche passen.", filterDataMessage: "Für diese Sprache enthält der Katalog noch keine Daten. Es werden alle verfügbaren Filme angezeigt.",
@@ -160,7 +167,9 @@
       findButton: "Buscar filmes", genreLabel: "Gênero", allGenres: "Todos os gêneros", recognitionLabel: "Prêmios", allFilms: "Todos os filmes",
       awardWinners: "Vencedores de grandes prêmios", perPageLabel: "Por página", allLanguages: "Todos os idiomas de filmes",
       recommendedMovies: "Filmes recomendados", allMovies: "Todos os filmes", countExact: "{count} correspondências exatas", countClosest: "{count} opções próximas",
-      countBrowse: "{count} filmes", exactMatch: "Correspondência exata", closestMatch: "Opção próxima", unverified: "Não verificado",
+      countBrowse: "{count} filmes", countTiers: "{exact} exatas, {close} próximas, {related} relacionadas",
+      exactMatch: "Correspondência exata", closeMatch: "Correspondência próxima", relatedMatch: "Correspondência relacionada",
+      closestMatch: "Opção próxima", unverified: "Não verificado",
       partialMessage: "Não encontrei uma correspondência exata, mas estas opções são próximas. Alguns detalhes não podem ser confirmados neste catálogo.",
       emptyMessage: "Não encontrei uma opção próxima. Tente um gênero, clima, ator ou uma breve pista da trama.",
       exactMessage: "Encontrei filmes que correspondem ao que você pediu.", filterDataMessage: "O catálogo ainda não tem dados para esse idioma. Mostrando todos os filmes disponíveis.",
@@ -182,7 +191,8 @@
       findButton: "映画を検索", genreLabel: "ジャンル", allGenres: "すべてのジャンル", recognitionLabel: "受賞歴", allFilms: "すべての映画",
       awardWinners: "主要な受賞作", perPageLabel: "1ページあたり", allLanguages: "すべての映画の言語",
       recommendedMovies: "おすすめ映画", allMovies: "すべての映画", countExact: "完全一致 {count} 件", countClosest: "近い候補 {count} 件",
-      countBrowse: "{count} 件", exactMatch: "完全一致", closestMatch: "近い候補", unverified: "未確認",
+      countBrowse: "{count} 件", countTiers: "完全一致 {exact} 件・近い候補 {close} 件・関連候補 {related} 件",
+      exactMatch: "完全一致", closeMatch: "近い候補", relatedMatch: "関連候補", closestMatch: "近い候補", unverified: "未確認",
       partialMessage: "完全に一致する作品はありませんが、近い候補を表示します。一部の情報はこのカタログでは確認できません。",
       emptyMessage: "近い作品が見つかりません。ジャンル、雰囲気、俳優、短いあらすじを指定してください。",
       exactMessage: "ご希望に合う映画が見つかりました。", filterDataMessage: "この言語のデータはまだありません。利用可能な映画をすべて表示しています。",
@@ -204,7 +214,8 @@
       findButton: "영화 검색", genreLabel: "장르", allGenres: "모든 장르", recognitionLabel: "수상", allFilms: "모든 영화",
       awardWinners: "주요 수상작", perPageLabel: "페이지당", allLanguages: "모든 영화 언어",
       recommendedMovies: "추천 영화", allMovies: "모든 영화", countExact: "정확히 일치하는 영화 {count}편", countClosest: "가까운 영화 {count}편",
-      countBrowse: "영화 {count}편", exactMatch: "정확히 일치", closestMatch: "가까운 추천", unverified: "확인되지 않음",
+      countBrowse: "영화 {count}편", countTiers: "정확 {exact}편 · 근접 {close}편 · 관련 {related}편",
+      exactMatch: "정확히 일치", closeMatch: "근접 일치", relatedMatch: "관련 일치", closestMatch: "가까운 추천", unverified: "확인되지 않음",
       partialMessage: "정확히 일치하는 영화는 없지만 가까운 작품을 찾았습니다. 일부 정보는 카탈로그에서 확인할 수 없습니다.",
       emptyMessage: "가까운 영화를 찾지 못했습니다. 장르, 분위기, 배우 또는 짧은 줄거리를 입력해 보세요.",
       exactMessage: "요청에 맞는 영화를 찾았습니다.", filterDataMessage: "이 언어의 카탈로그 정보가 아직 없습니다. 이용 가능한 영화를 모두 표시합니다.",
@@ -226,7 +237,8 @@
       findButton: "搜索电影", genreLabel: "类型", allGenres: "所有类型", recognitionLabel: "奖项", allFilms: "所有电影",
       awardWinners: "重要奖项获奖电影", perPageLabel: "每页数量", allLanguages: "所有电影语言",
       recommendedMovies: "推荐电影", allMovies: "所有电影", countExact: "{count} 部完全匹配", countClosest: "{count} 部相近电影",
-      countBrowse: "{count} 部电影", exactMatch: "完全匹配", closestMatch: "相近推荐", unverified: "未验证",
+      countBrowse: "{count} 部电影", countTiers: "完全匹配 {exact} 部 · 接近 {close} 部 · 相关 {related} 部",
+      exactMatch: "完全匹配", closeMatch: "接近匹配", relatedMatch: "相关匹配", closestMatch: "相近推荐", unverified: "未验证",
       partialMessage: "没有完全匹配的电影，但找到了相近选项。此目录无法确认部分信息。", emptyMessage: "没有找到相近电影。试试输入类型、氛围、演员或简短剧情线索。",
       exactMessage: "找到了符合要求的电影。", filterDataMessage: "目录暂时没有该语言的数据，现显示所有可用电影。",
       emptyStateTitle: "未找到电影。", emptyStateBody: "请尝试其他搜索词或选择其他类型。",
@@ -247,7 +259,8 @@
       findButton: "फ़िल्में खोजें", genreLabel: "शैली", allGenres: "सभी शैलियाँ", recognitionLabel: "पुरस्कार", allFilms: "सभी फ़िल्में",
       awardWinners: "प्रमुख पुरस्कार विजेता", perPageLabel: "प्रति पृष्ठ", allLanguages: "सभी फ़िल्मों की भाषाएँ",
       recommendedMovies: "सुझाई गई फ़िल्में", allMovies: "सभी फ़िल्में", countExact: "{count} सटीक मेल", countClosest: "{count} क़रीबी विकल्प",
-      countBrowse: "{count} फ़िल्में", exactMatch: "सटीक मेल", closestMatch: "क़रीबी विकल्प", unverified: "अपुष्ट",
+      countBrowse: "{count} फ़िल्में", countTiers: "{exact} सटीक, {close} क़रीबी, {related} संबंधित",
+      exactMatch: "सटीक मेल", closeMatch: "क़रीबी मेल", relatedMatch: "संबंधित मेल", closestMatch: "क़रीबी विकल्प", unverified: "अपुष्ट",
       partialMessage: "सटीक मेल नहीं मिला, लेकिन कुछ क़रीबी विकल्प हैं। इस सूची में कुछ जानकारी की पुष्टि नहीं हो सकती।",
       emptyMessage: "कोई क़रीबी फ़िल्म नहीं मिली। शैली, मूड, अभिनेता या कहानी का छोटा संकेत आज़माएँ।",
       exactMessage: "आपकी पसंद से मेल खाती फ़िल्में मिलीं।", filterDataMessage: "इस भाषा की जानकारी अभी सूची में नहीं है। सभी उपलब्ध फ़िल्में दिखाई जा रही हैं।",
@@ -361,8 +374,15 @@
     document.querySelectorAll("[data-result-kind]").forEach((element) => {
       const count = Number(element.dataset.resultCount || 0);
       const kind = element.dataset.resultKind;
-      const key = kind === "exact" ? "countExact" : kind === "closest" ? "countClosest" : "countBrowse";
-      element.textContent = translate(key).replace("{count}", String(count));
+      if (kind === "tiers") {
+        element.textContent = translate("countTiers")
+          .replace("{exact}", element.dataset.countExact || "0")
+          .replace("{close}", element.dataset.countClose || "0")
+          .replace("{related}", element.dataset.countRelated || "0");
+      } else {
+        const key = kind === "exact" ? "countExact" : kind === "closest" ? "countClosest" : "countBrowse";
+        element.textContent = translate(key).replace("{count}", String(count));
+      }
     });
     document.querySelectorAll("[data-i18n-page]").forEach((element) => {
       element.textContent = translate("pageCount")
@@ -372,7 +392,14 @@
     document.querySelectorAll("[data-assistant-state]").forEach((element) => {
       const state = element.dataset.assistantState;
       const messageKey = state === "filter-data" || state === "unmapped" ? "filterDataMessage" : `${state}Message`;
-      element.textContent = translate(messageKey);
+      const serverMessage = element.textContent;
+      const detailMarkers = [" Showing results for ", " The catalog has direct metadata evidence for only "];
+      const detailIndex = detailMarkers
+        .map((marker) => serverMessage.indexOf(marker))
+        .filter((index) => index >= 0)
+        .sort((left, right) => left - right)[0];
+      const details = detailIndex >= 0 ? serverMessage.slice(detailIndex) : "";
+      element.textContent = `${translate(messageKey)}${details}`;
     });
     document.querySelectorAll("[data-i18n-aria]").forEach((element) => {
       if (!ariaDefaults.has(element)) ariaDefaults.set(element, element.getAttribute("aria-label") || "");

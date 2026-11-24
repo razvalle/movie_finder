@@ -6,6 +6,7 @@ Run from the project root:
 
 import argparse
 import hashlib
+from itertools import product
 import json
 import math
 import os
@@ -15,7 +16,7 @@ import socket
 import sys
 import time
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 from functools import lru_cache
 from pathlib import Path
 from unittest.mock import patch
@@ -35,19 +36,28 @@ from data.synonyms import (
     THEME_SYNONYMS,
 )
 from nlp.query import build_structured_query
-from nlp.smart_search import interpret_query
+from nlp.concepts import CONCEPT_TABLE_PATH
+from nlp.smart_search import CONCEPT_TABLE, interpret_query
 
 MAX_LATENCY_SECONDS = 5.0
+MIN_TOPIC_SUPPORT = 3
+MOVIE_BY_ID = {str(movie["id"]): movie for movie in MOVIES}
+MOVIE_ID_STRING_BY_ID = {movie_id: movie_id for movie_id in MOVIE_BY_ID}
+GENERATED_SYNOPSIS_RE = re.compile(
+    r"^imdb rating \d+(?:\.\d+)?/10 from [\d,]+ votes; released in \d{4}\. genres:",
+    re.IGNORECASE,
+)
 BASELINE_PATH = ROOT / "tests" / "search_trial_baseline.json"
 ORACLE_COMMON_WORDS = {
-    "about", "after", "again", "also", "and", "any", "are", "because",
+    "a", "about", "after", "again", "also", "an", "and", "any", "are", "because",
     "been", "before", "being", "between", "both", "but", "came", "can",
     "come", "could", "does", "during", "each", "even", "every", "from",
     "give", "going", "have", "here", "into", "just", "like", "make",
     "many", "more", "most", "much", "must", "only", "other", "over",
+    "movie", "movies", "film", "films", "something", "thing",
     "same", "some", "such", "than", "that", "their", "there", "these",
     "they", "this", "those", "through", "under", "very", "want", "were",
-    "what", "when", "where", "which", "while", "with", "would",
+    "the", "what", "when", "where", "which", "while", "with", "would",
 }
 EXCLUSION_SYNONYMS = {
     "excluded_genres": {tag: tuple(set([tag, *forms])) for tag, forms in GENRE_SYNONYMS.items()},
@@ -63,6 +73,21 @@ def _oracle_tokens(value):
     return re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", str(value)).casefold(), flags=re.UNICODE)
 
 
+def _oracle_has_complete_title(query, movie):
+    query_tokens = _oracle_tokens(query)
+    title_tokens = _oracle_tokens(movie.get("title", ""))
+    title_forms = [title_tokens]
+    if title_tokens and title_tokens[0] in {"a", "an", "the"}:
+        title_forms.append(title_tokens[1:])
+    return any(
+        title and any(
+            query_tokens[start:start + len(title)] == title
+            for start in range(len(query_tokens) - len(title) + 1)
+        )
+        for title in title_forms
+    )
+
+
 @lru_cache(maxsize=4096)
 def _token_forms(token):
     forms = {token}
@@ -75,6 +100,36 @@ def _token_forms(token):
     return forms
 
 
+def _oracle_term_forms(token):
+    forms = {token}
+    if len(token) > 4 and token.endswith("ies"):
+        forms.add(token[:-3] + "y")
+    elif len(token) > 4 and token.endswith(("ches", "shes", "sses", "xes", "zes")):
+        forms.add(token[:-2])
+    elif len(token) > 3 and token.endswith("s") and not token.endswith(("ss", "us", "is")):
+        forms.add(token[:-1])
+    for form in tuple(forms):
+        if form.endswith("y") and len(form) > 3:
+            forms.add(form[:-1] + "ies")
+        elif form.endswith("is") and len(form) > 4:
+            forms.add(form[:-2] + "es")
+        elif form.endswith(("ch", "sh", "s", "x", "z")):
+            forms.add(form + "es")
+        elif len(form) > 3:
+            forms.add(form + "s")
+    return forms
+
+
+def _phrase_catalog_ids(catalog_phrase_ids, phrase):
+    tokens = _oracle_tokens(phrase)
+    if not tokens:
+        return set()
+    ids = set()
+    for variant in product(*(_oracle_term_forms(token) for token in tokens)):
+        ids.update(catalog_phrase_ids.get(" ".join(variant), ()))
+    return ids
+
+
 @lru_cache(maxsize=4096)
 def _phrase_tokens(phrase):
     return tuple(_oracle_tokens(phrase))
@@ -83,6 +138,67 @@ def _phrase_tokens(phrase):
 @lru_cache(maxsize=4096)
 def _cached_movie_tokens(movie_id, text):
     return tuple(_oracle_tokens(text))
+
+
+@lru_cache(maxsize=32768)
+def _normalized_oracle_field(movie_id, text):
+    return " ".join(_cached_movie_tokens(movie_id, text))
+
+
+def _build_exclusion_phrase_index():
+    variants = set()
+    max_phrase_length = 1
+    for synonym_table in EXCLUSION_SYNONYMS.values():
+        for forms in synonym_table.values():
+            for phrase in forms:
+                tokens = _oracle_tokens(phrase)
+                if len(tokens) < 2 or len(tokens) > 3:
+                    continue
+                max_phrase_length = max(max_phrase_length, len(tokens))
+                variants.update(
+                    " ".join(variant)
+                    for variant in product(*(
+                        _oracle_term_forms(token) for token in tokens
+                    ))
+                )
+    index = defaultdict(set)
+    for movie_id, fields in ORACLE_FIELDS_BY_ID.items():
+        for field in fields:
+            tokens = _cached_movie_tokens(movie_id, field)
+            for size in range(2, min(max_phrase_length, len(tokens)) + 1):
+                for start in range(len(tokens) - size + 1):
+                    phrase = " ".join(tokens[start:start + size])
+                    if phrase in variants:
+                        index[phrase].add(movie_id)
+    return variants, {
+        phrase: frozenset(movie_ids) for phrase, movie_ids in index.items()
+    }
+
+
+@lru_cache(maxsize=65536)
+def _catalog_movie_has_phrase(movie_id, phrase):
+    phrase_tokens = _phrase_tokens(phrase)
+    if len(phrase_tokens) == 1:
+        return bool(
+            _oracle_term_forms(phrase_tokens[0])
+            & ORACLE_TOKEN_SET_BY_ID.get(movie_id, frozenset())
+        )
+    variants = {
+        " ".join(variant)
+        for variant in product(*(
+            _oracle_term_forms(token) for token in phrase_tokens
+        ))
+    }
+    if variants & EXCLUSION_PHRASE_VARIANTS:
+        return any(
+            movie_id in EXCLUSION_PHRASE_IDS.get(variant, ())
+            for variant in variants
+        )
+    for field in ORACLE_FIELDS_BY_ID.get(movie_id, ()):
+        text = f" {_normalized_oracle_field(movie_id, field)} "
+        if any(f" {variant} " in text for variant in variants):
+            return True
+    return False
 
 
 def _contains_phrase(tokens, phrase, token_set=None):
@@ -122,6 +238,8 @@ def _has_exact_article_alias(fragment, movies):
     articleless_fragment = re.sub(r"^(?:the|a|an)\s+", "", normalized_fragment)
     if articleless_fragment == normalized_fragment:
         return False
+    if movies is MOVIES:
+        return articleless_fragment in TITLE_KEYS
     return any(
         _normalized_title(movie.get("title", "")) == articleless_fragment
         for movie in movies
@@ -160,6 +278,10 @@ def _movie_field_texts(movie):
 
 
 ORACLE_TEXT_BY_ID = {str(movie["id"]): _movie_text(movie) for movie in MOVIES}
+ORACLE_TOKEN_SET_BY_ID = {
+    movie_id: frozenset(_oracle_tokens(text))
+    for movie_id, text in ORACLE_TEXT_BY_ID.items()
+}
 ORACLE_FIELDS_BY_ID = {
     str(movie["id"]): tuple(_movie_field_texts(movie))
     for movie in MOVIES
@@ -168,11 +290,23 @@ TITLE_KEY_BY_ID = {
     str(movie["id"]): _normalized_title(movie.get("title", ""))
     for movie in MOVIES
 }
+MOVIE_IDS_BY_TITLE_KEY = defaultdict(list)
+for movie in MOVIES:
+    MOVIE_IDS_BY_TITLE_KEY[TITLE_KEY_BY_ID[str(movie["id"])]].append(str(movie["id"]))
+TITLE_KEYS = set(MOVIE_IDS_BY_TITLE_KEY)
+MOVIE_ORDER_BY_ID = {
+    str(movie["id"]): index for index, movie in enumerate(MOVIES)
+}
+EXCLUSION_PHRASE_VARIANTS, EXCLUSION_PHRASE_IDS = _build_exclusion_phrase_index()
 
 
 def _descriptive_text(movie):
     fields = [movie.get("synopsis", "")]
-    fields.extend(movie.get("keywords") or [])
+    title = _normalized_title(movie.get("title", ""))
+    fields.extend(
+        keyword for keyword in movie.get("keywords") or []
+        if _normalized_title(keyword) != title
+    )
     return " ".join(str(value) for value in fields if value)
 
 
@@ -204,45 +338,10 @@ def _matches(movie, constraints):
     ):
         if set(constraints.get(key, [])) & set(movie.get(field) or []):
             return False
-    exclusion_keys = (
-        "excluded_genres", "excluded_moods", "excluded_themes",
-        "excluded_descriptors", "excluded_terms",
-    )
-    needs_text = any(constraints.get(key) for key in exclusion_keys) or bool(constraints.get("terms_all"))
     movie_id = str(movie.get("id"))
     title_key = TITLE_KEY_BY_ID.get(movie_id)
     if title_key is None:
         title_key = _normalized_title(movie.get("title", ""))
-    if needs_text:
-        searchable_text = ORACLE_TEXT_BY_ID.get(movie_id)
-        if searchable_text is None:
-            searchable_text = _movie_text(movie)
-        text_tokens = _cached_movie_tokens(movie_id, searchable_text)
-    else:
-        text_tokens = ()
-    text_token_set = set(text_tokens)
-    exclusion_tokens = [
-        _cached_movie_tokens(movie_id, field)
-        for field in ORACLE_FIELDS_BY_ID.get(movie_id, (_movie_text(movie),))
-    ] if any(constraints.get(key) for key in exclusion_keys) else []
-    exclusion_token_sets = [set(tokens) for tokens in exclusion_tokens]
-    for constraint_key in (
-        "excluded_genres", "excluded_moods", "excluded_themes", "excluded_descriptors",
-    ):
-        for canonical in constraints.get(constraint_key, []):
-            forms = EXCLUSION_SYNONYMS[constraint_key].get(canonical, (canonical,))
-            if any(
-                _contains_phrase(tokens, form, token_set)
-                for tokens, token_set in zip(exclusion_tokens, exclusion_token_sets)
-                for form in forms
-            ):
-                return False
-    if any(
-        _contains_phrase(tokens, term, token_set)
-        for tokens, token_set in zip(exclusion_tokens, exclusion_token_sets)
-        for term in constraints.get("excluded_terms", [])
-    ):
-        return False
     year = movie.get("release_year")
     if constraints.get("year_min") is not None and (year is None or year < constraints["year_min"]):
         return False
@@ -270,24 +369,66 @@ def _matches(movie, constraints):
         )):
             return False
     if constraints.get("title_exact") is not None:
-        target = constraints["title_exact"]
-        if title_key != target:
+        if title_key != constraints["title_exact"]:
             return False
-    if constraints.get("title_fragment"):
-        if constraints["title_fragment"] not in title_key:
-            return False
+    if constraints.get("title_fragment") and constraints["title_fragment"] not in title_key:
+        return False
+    has_catalog_fields = movie_id in ORACLE_FIELDS_BY_ID
+    for constraint_key in (
+        "excluded_genres", "excluded_moods", "excluded_themes", "excluded_descriptors",
+    ):
+        for canonical in constraints.get(constraint_key, []):
+            forms = EXCLUSION_SYNONYMS[constraint_key].get(canonical, (canonical,))
+            if has_catalog_fields and any(
+                _catalog_movie_has_phrase(movie_id, form) for form in forms
+            ):
+                return False
+            if not has_catalog_fields and any(
+                _contains_phrase(_oracle_tokens(field), form)
+                for field in _movie_field_texts(movie)
+                for form in forms
+            ):
+                return False
+    if has_catalog_fields and any(
+        _catalog_movie_has_phrase(movie_id, term)
+        for term in constraints.get("excluded_terms", [])
+    ):
+        return False
+    if not has_catalog_fields and any(
+        _contains_phrase(_oracle_tokens(field), term)
+        for field in _movie_field_texts(movie)
+        for term in constraints.get("excluded_terms", [])
+    ):
+        return False
     if constraints.get("terms_all"):
+        searchable_text = ORACLE_TEXT_BY_ID.get(movie_id, _movie_text(movie))
+        text_token_set = set(_cached_movie_tokens(movie_id, searchable_text))
         if not set(constraints["terms_all"]).issubset(text_token_set):
             return False
     return True
 
 
 def _expected(constraints):
+    constraint_keys = set(constraints)
+    if "title_exact" in constraints:
+        candidates = [
+            MOVIE_BY_ID[movie_id]
+            for movie_id in MOVIE_IDS_BY_TITLE_KEY.get(constraints["title_exact"], ())
+        ]
+        return [movie for movie in candidates if _matches(movie, constraints)]
+    if "title_fragment" in constraints:
+        fragment = constraints["title_fragment"]
+        candidates = [
+            movie for movie in MOVIES
+            if fragment in TITLE_KEY_BY_ID[str(movie["id"])]
+        ]
+        return [movie for movie in candidates if _matches(movie, constraints)]
     return [movie for movie in MOVIES if _matches(movie, constraints)]
 
 
 def generate_trials():
     trials = []
+    expected_ids_cache = {}
     known_terms = {
         token
         for dictionary in (GENRE_SYNONYMS, MOOD_SYNONYMS, THEME_SYNONYMS, CONTENT_DESCRIPTOR_SYNONYMS)
@@ -296,16 +437,37 @@ def generate_trials():
         for token in _oracle_tokens(phrase)
     }
 
-    def add(category, query, constraints=None, source_id=None, check_filter=False, note="", params=None, expected_parser=None):
+    def add(
+        category, query, constraints=None, source_id=None, check_filter=False, note="",
+        params=None, expected_parser=None, oracle_strong_ids=None,
+    ):
         constraints = constraints or {}
-        expected = _expected(constraints)
+        strong_id_set = set(oracle_strong_ids) if oracle_strong_ids is not None else None
+        if strong_id_set is not None:
+            ids_key = frozenset(strong_id_set)
+            expected_ids = expected_ids_cache.get(ids_key)
+            if expected_ids is None:
+                expected_ids = [
+                    MOVIE_ID_STRING_BY_ID[movie_id]
+                    for movie_id in sorted(
+                        strong_id_set,
+                        key=lambda movie_id: MOVIE_ORDER_BY_ID[movie_id],
+                    )
+                ]
+                expected_ids_cache[ids_key] = expected_ids
+        else:
+            expected_ids = [
+                MOVIE_ID_STRING_BY_ID[str(movie["id"])]
+                for movie in _expected(constraints)
+            ]
         trial_id, split = _trial_identity(category, query, params or {})
         trials.append({
             "id": trial_id,
             "category": category,
             "query": query,
             "constraints": constraints,
-            "expected_ids": [str(movie["id"]) for movie in expected],
+            "expected_ids": expected_ids,
+            "oracle_strong_ids": expected_ids if strong_id_set is not None else [],
             "source_id": str(source_id) if source_id is not None else None,
             "check_filter": check_filter,
             "note": note,
@@ -325,14 +487,25 @@ def generate_trials():
         if re.search(r"[^\w\s]", title, flags=re.UNICODE):
             add("title", re.sub(r"[^\w\s]", " ", title).strip(), {"title_exact": exact}, movie["id"], True, "punctuation removed")
         if not exact.startswith("the "):
-            add("title", f"the {title}", {"title_exact": exact}, movie["id"], True, "leading article")
+            leading_article_query = f"the {title}"
+            leading_article_title = _normalized_title(leading_article_query)
+            article_title_matches = [
+                MOVIE_BY_ID[movie_id]
+                for movie_id in MOVIE_IDS_BY_TITLE_KEY.get(leading_article_title, ())
+            ]
+            if article_title_matches:
+                for candidate in article_title_matches:
+                    add(
+                        "title", leading_article_query,
+                        {"title_exact": leading_article_title}, candidate["id"],
+                        True, "leading article resolves to an exact catalog title",
+                    )
+            else:
+                add("title", leading_article_query, {"title_exact": exact}, movie["id"], True, "leading article")
         words = title.split()
         if len(words) >= 3 and int(movie["id"]) % 4 == 0:
             fragment = _normalized_title(" ".join(words[:2]))
-            exact_fragment_matches = any(
-                _normalized_title(candidate.get("title", "")) == fragment
-                for candidate in MOVIES
-            )
+            exact_fragment_matches = fragment in TITLE_KEYS
             if not exact_fragment_matches and not _has_exact_article_alias(fragment, MOVIES):
                 add(
                     "title-fragment",
@@ -367,6 +540,142 @@ def generate_trials():
             False,
             "rare catalog field terms",
         )
+
+    topic_phrases = set()
+    topic_tag_fields = ("keywords", "themes", "genres")
+    for movie in MOVIES:
+        for field in topic_tag_fields:
+            values = movie.get(field) or []
+            values = [values] if isinstance(values, str) else values
+            for value in values:
+                if field == "keywords" and _normalized_title(value) == TITLE_KEY_BY_ID[str(movie["id"])]:
+                    continue
+                tokens = _oracle_tokens(value)
+                for size in (1, 2, 3):
+                    for start in range(len(tokens) - size + 1):
+                        phrase_tokens = tokens[start:start + size]
+                        if all(token in ORACLE_COMMON_WORDS for token in phrase_tokens):
+                            continue
+                        topic_phrases.add(" ".join(phrase_tokens))
+    catalog_phrase_ids = defaultdict(set)
+    topic_fields = ("synopsis", "overview", "keywords", "themes", "genres")
+    for movie in MOVIES:
+        for field in topic_fields:
+            values = movie.get(field) or []
+            values = [values] if isinstance(values, str) else values
+            for value in values:
+                if field in {"synopsis", "overview"} and GENERATED_SYNOPSIS_RE.match(str(value).strip()):
+                    continue
+                if field == "keywords" and _normalized_title(value) == TITLE_KEY_BY_ID[str(movie["id"])]:
+                    continue
+                tokens = _oracle_tokens(value)
+                for size in (1, 2, 3):
+                    for start in range(len(tokens) - size + 1):
+                        phrase_tokens = tokens[start:start + size]
+                        if all(token in ORACLE_COMMON_WORDS for token in phrase_tokens):
+                            continue
+                        phrase = " ".join(phrase_tokens)
+                        catalog_phrase_ids[phrase].add(str(movie["id"]))
+    topic_ids = {
+        phrase: catalog_phrase_ids.get(phrase, set())
+        for phrase in topic_phrases
+    }
+    topic_seeds = [
+        (phrase, sorted(ids))
+        for phrase, ids in topic_ids.items()
+        if len(ids) >= MIN_TOPIC_SUPPORT
+    ]
+    topic_seeds.sort(key=lambda item: (-len(item[1]), item[0]))
+    for phrase, direct_ids in topic_seeds:
+        concept_key = CONCEPT_TABLE.get("aliases", {}).get(phrase, phrase)
+        concept = CONCEPT_TABLE.get("concepts", {}).get(concept_key, {})
+        oracle_terms = {phrase}
+        oracle_terms.update(
+            item.get("term", "")
+            for item in concept.get("associations", [])
+            if isinstance(item, dict)
+        )
+        oracle_terms.update(
+            item.get("term", "")
+            for item in concept.get("aliases", [])
+            if isinstance(item, dict)
+        )
+        meaningful_words = [
+            token for token in _oracle_tokens(phrase)
+            if token not in ORACLE_COMMON_WORDS
+        ]
+        if len(meaningful_words) == 1:
+            oracle_terms.add(meaningful_words[0])
+        strong_ids = set()
+        for term in oracle_terms:
+            strong_ids.update(_phrase_catalog_ids(catalog_phrase_ids, term))
+        strong_ids = sorted(strong_ids)
+        if not strong_ids:
+            strong_ids = direct_ids
+        variants = [
+            ("spacing-compound", phrase.replace(" ", "")),
+            ("spacing-hyphen", phrase.replace(" ", "-")),
+            ("casing", phrase.upper()),
+            ("filler", f"movies about {phrase}"),
+            ("filler", f"find films featuring {phrase}"),
+            ("plural", phrase + "s"),
+        ]
+        words = phrase.split()
+        typo_word = words[0]
+        if len(typo_word) > 4:
+            variants.append(("typo", " ".join([typo_word[:1] + typo_word[2:], *words[1:]])))
+        if len(words) > 1:
+            variants.append(("word-order", " ".join(reversed(words))))
+        for category, query in variants:
+            add(
+                category, query, note=f"catalog phrase: {phrase}",
+                oracle_strong_ids=strong_ids,
+            )
+        for query in (
+            f"movies about {phrase} but not comedy",
+            f"without comedy, movies about {phrase}",
+        ):
+            allowed = [
+                movie_id for movie_id in strong_ids
+                if _matches(MOVIE_BY_ID[movie_id], {"excluded_genres": ["comedy"]})
+            ]
+            if allowed:
+                add(
+                    "negation-placement", query, {"excluded_genres": ["comedy"]},
+                    check_filter=True, note=f"catalog phrase: {phrase}",
+                    oracle_strong_ids=allowed,
+                )
+        if len(strong_ids) < 40:
+            continue
+        supported_movie = MOVIE_BY_ID[strong_ids[0]]
+        topic_genre = next(iter(supported_movie.get("genres") or []), None)
+        if not topic_genre:
+            continue
+        for award in ("winners", "academy", "palme", "golden-bear", "golden-lion"):
+            filtered_ids = [
+                movie_id for movie_id in strong_ids
+                if _matches(
+                    MOVIE_BY_ID[movie_id],
+                    {"genres_any": [topic_genre], "award": award},
+                )
+            ]
+            if not filtered_ids:
+                continue
+            add(
+                "topic-filter-combination",
+                f"movies about {phrase}",
+                {"genres_any": [topic_genre], "award": award},
+                check_filter=True,
+                note=f"topic + genre and recognition chips: {phrase}",
+                params={
+                    "genre": topic_genre,
+                    "awards": award,
+                    "per_page": 12,
+                    "page": 1,
+                    "sort": "rating",
+                },
+                oracle_strong_ids=filtered_ids,
+            )
 
     genres = sorted({genre for movie in MOVIES for genre in movie.get("genres", [])})
     for genre in genres:
@@ -650,6 +959,7 @@ class RouteRunner:
             "reranking_out": None,
         }
         verification = {}
+        network_calls = []
         originals = {
             "retrieve": app_module.retrieve_candidates,
             "rerank": app_module.rerank_candidates,
@@ -690,6 +1000,10 @@ class RouteRunner:
                 counts["after_hard_filters"] = args[2]
             return originals["debug"](*args, **kwargs)
 
+        def deny_network(*args, **kwargs):
+            network_calls.append(str(args[0]) if args else "unknown")
+            raise AssertionError("offline trial attempted network I/O")
+
         template_rendered.connect(capture, sender=app_module.app)
         started = time.perf_counter()
         try:
@@ -698,7 +1012,7 @@ class RouteRunner:
                 with (
                     patch("app.allow_search", return_value=True),
                     patch("nlp.smart_search._redis_client", return_value=None),
-                    patch("socket.create_connection", side_effect=AssertionError("offline trial attempted network I/O")),
+                    patch("socket.create_connection", side_effect=deny_network),
                     patch.object(app_module, "retrieve_candidates", side_effect=retrieve),
                     patch.object(app_module, "rerank_candidates", side_effect=rerank),
                     patch.object(app_module, "rank_movies", side_effect=rank),
@@ -729,12 +1043,9 @@ class RouteRunner:
         rendered = context.get("results") or []
         browsed = context.get("movies") or []
         final_entries = rendered or browsed
-        if len(query) <= 500:
-            extracted = build_structured_query(query)["preferences"] if query else {}
-            understanding = interpret_query(query) if query else {}
-        else:
-            extracted = {"rejected": "query exceeds 500 characters"}
-            understanding = {}
+        effective_query = query[:500]
+        extracted = build_structured_query(effective_query)["preferences"] if effective_query else {}
+        understanding = interpret_query(effective_query) if effective_query else {}
         return {
             "status": response.status_code,
             "exception": None,
@@ -765,6 +1076,19 @@ class RouteRunner:
                 or response_body.strip()
             ),
             "searched": context.get("searched", False),
+            "query_capped": len(query) > 500,
+            "network_attempted": bool(network_calls),
+            "page_count": len(final_entries),
+            "page_number": context.get("page_number", 1),
+            "per_page": context.get("per_page", 48),
+            "page_count_matches": len(final_entries) == max(
+                0,
+                min(
+                    context.get("per_page", 48),
+                    context.get("result_count", 0)
+                    - (context.get("page_number", 1) - 1) * context.get("per_page", 48),
+                ),
+            ),
             "raw_markup_reflected": any(
                 marker in query and query in response_body
                 for marker in ("<script", "<img", "<svg", "<iframe")
@@ -781,6 +1105,12 @@ def _check_trial(trial, actual):
         failures.append({"stage": "http", "reason": f"HTTP status {actual['status']}"})
     if actual["latency_seconds"] > MAX_LATENCY_SECONDS:
         failures.append({"stage": "latency", "reason": f"{actual['latency_seconds']:.3f}s exceeds {MAX_LATENCY_SECONDS}s"})
+    if actual.get("network_attempted"):
+        failures.append({"stage": "offline", "reason": "core search attempted network I/O"})
+    if actual.get("query_capped") and "500 characters" not in actual.get("notice", ""):
+        failures.append({"stage": "input-cap", "reason": "overlong query was not clearly reported as capped"})
+    if not actual.get("page_count_matches", True):
+        failures.append({"stage": "pagination-count", "reason": "rendered page size disagrees with Showing X of N"})
     for key, expected_value in trial.get("expected_parser", {}).items():
         actual_value = actual["preferences"].get(key)
         if isinstance(expected_value, list) and isinstance(actual_value, list):
@@ -843,6 +1173,29 @@ def _check_trial(trial, actual):
             failures.append({"stage": "false-exact", "reason": "full match violates independent hard filters"})
             break
         if result.get("match_level") == "full":
+            if not isinstance(score, (int, float)) or score < app_module.EXACT_MATCH_THRESHOLD:
+                failures.append({
+                    "stage": "false-exact",
+                    "reason": "full match is below the exact-score threshold",
+                    "movie_id": result["id"],
+                })
+                break
+            strong_ids = set(trial.get("oracle_strong_ids") or [])
+            movie = next(
+                (item for item in MOVIES if str(item["id"]) == str(result["id"])),
+                None,
+            )
+            if (
+                strong_ids
+                and str(result["id"]) not in strong_ids
+                and (movie is None or not _oracle_has_complete_title(trial["query"], movie))
+            ):
+                failures.append({
+                    "stage": "false-exact",
+                    "reason": "full match lacks independent strong catalog evidence",
+                    "movie_id": result["id"],
+                })
+                break
             checked = actual["verification"].get(str(result["id"]), {})
             if not checked.get("satisfied") or checked.get("unsatisfied") or checked.get("unverifiable"):
                 failures.append({
@@ -962,8 +1315,82 @@ def _pagination_checks(runner):
     }
 
 
+def _interaction_checks(runner):
+    trial = {"query": "action movies"}
+    plain = runner.run(trial, {"per_page": 48, "page": 1})
+    shared = runner.run(trial, {"per_page": 48, "page": 1})
+    chip_removed = runner.run(
+        trial,
+        {"per_page": 48, "page": 1, "genre": "action", "remove_genre": "action"},
+    )
+    mood_tile = runner.run({"query": "happy movies"}, {"per_page": 48, "page": 1})
+    mood_link = runner.run({"query": "happy movies"}, {"per_page": 48, "page": 1})
+    alternating = [
+        runner.run({"query": query}, {"per_page": 48, "page": 1})
+        for query in ("action movies", "space movies", "action movies")
+    ]
+    statuses = [
+        plain["status"], shared["status"], chip_removed["status"], mood_tile["status"],
+        mood_link["status"], *(item["status"] for item in alternating),
+    ]
+    return {
+        "status_ok": all(status is not None and status < 500 for status in statuses),
+        "shared_link_same_results": plain["result_ids"] == shared["result_ids"],
+        "chip_removal_same_query_results": plain["result_ids"] == chip_removed["result_ids"],
+        "mood_query_link_same_results": mood_tile["result_ids"] == mood_link["result_ids"],
+        "rapid_repeated_search_is_stable": alternating[0]["result_ids"] == alternating[2]["result_ids"],
+        "pass": (
+            all(status is not None and status < 500 for status in statuses)
+            and plain["result_ids"] == shared["result_ids"]
+            and plain["result_ids"] == chip_removed["result_ids"]
+            and mood_tile["result_ids"] == mood_link["result_ids"]
+            and alternating[0]["result_ids"] == alternating[2]["result_ids"]
+        ),
+    }
+
+
+def _case_exact_path_exists(path):
+    target = Path(path).resolve()
+    current = Path(target.anchor)
+    for part in target.parts[1:]:
+        if not current.is_dir() or part not in {entry.name for entry in current.iterdir()}:
+            return False
+        current = current / part
+    return current.exists()
+
+
+def _deployment_parity():
+    concept_rows = CONCEPT_TABLE.get("concepts", {})
+    model = app_module.TFIDF_MODEL
+    paths = {
+        "tfidf_cache": app_module.TFIDF_CACHE_PATH,
+        "concept_table": CONCEPT_TABLE_PATH,
+    }
+    return {
+        "tfidf_model_loaded": bool(
+            isinstance(model, dict)
+            and model.get("idf")
+            and model.get("vectors")
+            and model.get("norms")
+        ),
+        "tfidf_cache_exists": Path(app_module.TFIDF_CACHE_PATH).is_file(),
+        "concept_table_loaded": bool(CONCEPT_TABLE.get("enabled") and concept_rows),
+        "concept_count": len(concept_rows),
+        "paths_case_exact": {
+            name: _case_exact_path_exists(path) for name, path in paths.items()
+        },
+        "api_key_required": False,
+        "core_search_network_required": False,
+    }
+
+
 def run(args):
     trials = generate_trials()
+    topic_seed_count = len({
+        trial["note"].partition("catalog phrase: ")[2]
+        for trial in trials
+        if trial["note"].startswith("catalog phrase: ")
+    })
     if args.split != "all":
         trials = [trial for trial in trials if trial["split"] == args.split]
     if args.limit:
@@ -985,6 +1412,13 @@ def run(args):
         "crashes": 0,
         "http_5xx": 0,
         "recall": {k: {"hits": 0, "sources": 0} for k in (1, 5, 10, 20, 48)},
+        "strong_trials": 0,
+        "strong_expected": 0,
+        "strong_hits_at_48": 0,
+        "strong_results_at_48": 0,
+        "strong_hits_in_results": 0,
+        "strong_score_ties": 0,
+        "strong_empty_trials": 0,
     })
     failures = []
     latencies = []
@@ -1015,6 +1449,25 @@ def run(args):
                 for k, metric in metrics["recall"].items():
                     metric["sources"] += 1
                     metric["hits"] += trial["source_id"] in actual["result_ids"][:k]
+            strong_ids = set(trial.get("oracle_strong_ids") or [])
+            if strong_ids:
+                metrics["strong_trials"] += 1
+                metrics["strong_expected"] += len(strong_ids)
+                top_ids = actual["result_ids"][:48]
+                metrics["strong_empty_trials"] += not top_ids
+                metrics["strong_hits_at_48"] += len(strong_ids.intersection(top_ids))
+                metrics["strong_results_at_48"] += len(top_ids)
+                metrics["strong_hits_in_results"] += sum(
+                    result["id"] in strong_ids for result in actual["results"][:48]
+                )
+                score_counts = Counter(
+                    result.get("percent")
+                    for result in actual["results"][:48]
+                    if isinstance(result.get("percent"), (int, float))
+                )
+                metrics["strong_score_ties"] += sum(
+                    max(0, count - 1) for count in score_counts.values()
+                )
             if actual["exception"] or actual["status"] is None or actual["status"] >= 500:
                 crash_count += 1
             if actual["status"] is not None and actual["status"] >= 500:
@@ -1098,11 +1551,25 @@ def run(args):
             }, ensure_ascii=False, default=str) + "\n")
 
     pagination = _pagination_checks(runner)
+    interactions = _interaction_checks(runner)
+    deployment = _deployment_parity()
     failures.extend(stability_failures)
+    if not deployment["tfidf_model_loaded"] or not deployment["concept_table_loaded"] or not all(
+        deployment["paths_case_exact"].values()
+    ):
+        failures.append({
+            "stage": "deployment-parity",
+            "reason": "local TF-IDF or concept data is missing, unloaded, or has a case-mismatched path",
+        })
     total = len(trials)
     summary = {
         "catalog_movies": len(MOVIES),
         "trials": total,
+        "topic_oracle": {
+            "minimum_phrase_support": MIN_TOPIC_SUPPORT,
+            "seed_phrase_count": topic_seed_count,
+            "expected_set_source": "direct phrase and concept-table term scan of synopsis, keywords, themes, and genres",
+        },
         "category_counts": {key: value["trials"] for key, value in sorted(category_stats.items())},
         "category_split_pass_rates": {
             split: {
@@ -1154,6 +1621,25 @@ def run(args):
                     f"recall@{k}": metric["hits"] / metric["sources"] if metric["sources"] else None
                     for k, metric in values["recall"].items()
                 },
+                "strong_evidence": {
+                    "topic_trials": values["strong_trials"],
+                    "recall_at_48": (
+                        values["strong_hits_at_48"] / values["strong_expected"]
+                        if values["strong_expected"] else None
+                    ),
+                    "precision_at_48": (
+                        values["strong_hits_in_results"] / values["strong_results_at_48"]
+                        if values["strong_results_at_48"] else None
+                    ),
+                    "tie_rate": (
+                        values["strong_score_ties"] / values["strong_results_at_48"]
+                        if values["strong_results_at_48"] else 0.0
+                    ),
+                    "empty_result_rate": (
+                        values["strong_empty_trials"] / values["strong_trials"]
+                        if values["strong_trials"] else 0.0
+                    ),
+                },
             }
             for split, values in sorted(split_metrics.items())
         },
@@ -1181,10 +1667,13 @@ def run(args):
             "max": max(latencies, default=0.0),
         },
         "pagination": pagination,
+        "interaction_equivalence": interactions,
+        "deployment_parity": deployment,
         "failure_count": (
             sum(value["trials"] - value["passed"] for value in category_stats.values())
             + len(stability_failures)
             + int(not pagination["pass"])
+            + int(not interactions["pass"])
         ),
         "failure_examples": failures[:25],
         "jsonl": str(output.resolve()),
@@ -1207,7 +1696,12 @@ def run(args):
         }
     summary["baseline_guard"] = baseline_guard
     print(json.dumps(summary, indent=2, ensure_ascii=False))
-    return 0 if summary["failure_count"] == 0 and pagination["pass"] and baseline_guard["pass"] else 1
+    return 0 if (
+        summary["failure_count"] == 0
+        and pagination["pass"]
+        and interactions["pass"]
+        and baseline_guard["pass"]
+    ) else 1
 
 
 def main():

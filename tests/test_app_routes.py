@@ -10,6 +10,7 @@ import unittest
 import re
 import sqlite3
 import tempfile
+from html import unescape
 from copy import deepcopy
 from pathlib import Path
 from urllib.parse import quote
@@ -20,11 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import (
     COUNTRY_LABELS,
     app,
+    _contains_complete_title,
     build_match_reasons,
     detect_nationality,
     drop_constraints,
     find_title_matches,
     movie_poster_url,
+    rank_movies,
 )
 from data.generated_movies import GENERATED_MOVIES
 from data.movies import MOVIES
@@ -82,7 +85,7 @@ class SearchRouteTests(unittest.TestCase):
             ("/?q=a+detective+solving+a+murder+in+a+mansion&per_page=12", b"Recommended Movies"),
             ("/?q=scarry+rom+com+but+no+sad+ending+under+two+hours&per_page=12", b"Recommended Movies"),
             ("/?q=recommend+a+canadian+movie+called+incendies&per_page=12", b"Incendies"),
-            ("/?q=zzzzunknownword&per_page=12", b"No close matches found"),
+            ("/?q=zzzzunknownword&per_page=12", b"Closest match"),
         ]
         for url, marker in cases:
             with self.subTest(url=url):
@@ -106,6 +109,41 @@ class SearchRouteTests(unittest.TestCase):
         years = [int(value) for value in re.findall(rb"\xc2\xb7 (\d{4})</div>", response.data)]
         self.assertTrue(years)
         self.assertTrue(all(2015 <= year <= 2020 for year in years))
+
+    def test_natural_genre_conjunction_is_enforced_but_or_remains_alternative(self):
+        movies = [
+            {
+                "id": 990001, "title": "Both Genres", "synopsis": "A story.",
+                "genres": ["comedy", "drama"], "release_year": 2020, "runtime": 100,
+                "themes": [], "mood_tags": [], "keywords": [], "content_descriptors": [],
+                "average_rating": 7.0, "vote_count": 1000, "notable_awards": [],
+                "origin_regions": [],
+            },
+            {
+                "id": 990002, "title": "Comedy Only", "synopsis": "A story.",
+                "genres": ["comedy"], "release_year": 2020, "runtime": 100,
+                "themes": [], "mood_tags": [], "keywords": [], "content_descriptors": [],
+                "average_rating": 7.0, "vote_count": 1000, "notable_awards": [],
+                "origin_regions": [],
+            },
+            {
+                "id": 990003, "title": "Drama Only", "synopsis": "A story.",
+                "genres": ["drama"], "release_year": 2020, "runtime": 100,
+                "themes": [], "mood_tags": [], "keywords": [], "content_descriptors": [],
+                "average_rating": 7.0, "vote_count": 1000, "notable_awards": [],
+                "origin_regions": [],
+            },
+        ]
+        with patch("app.MOVIES", movies):
+            conjunction = self.client.get("/?q=comedy+and+drama+movies&per_page=48")
+            alternatives = self.client.get("/?q=comedy+or+drama+movies&per_page=48")
+
+        self.assertIn(b"Both Genres", conjunction.data)
+        self.assertNotIn(b"Comedy Only", conjunction.data)
+        self.assertNotIn(b"Drama Only", conjunction.data)
+        self.assertIn(b"Both Genres", alternatives.data)
+        self.assertIn(b"Comedy Only", alternatives.data)
+        self.assertIn(b"Drama Only", alternatives.data)
 
     def test_debug_panel_shows_negative_filters(self):
         response = self.client.get("/?q=filipino+horror+movies+without+comedy&debug=1")
@@ -200,13 +238,65 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b"No close matches found", runtime_response.data)
         self.assertIn(b"No close matches found", year_response.data)
 
-    def test_overlong_query_is_rejected_with_a_next_step(self):
+    def test_overlong_query_is_capped_with_a_next_step(self):
         query = "space " * 2000
         response = self.client.get("/?q=" + quote(query))
-        self.assertEqual(response.status_code, 400)
-        self.assertIn(b"500 characters", response.data)
-        self.assertIn(b"shorten", response.data.lower())
-        self.assertNotIn(b'data-detail-title=', response.data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"first 500 characters", response.data)
+
+    def test_retrieval_exception_degrades_to_filtered_closest_matches(self):
+        with (
+            patch("app.retrieve_candidates", side_effect=RuntimeError("retrieval failed")),
+            patch("app.write_search_record") as write_record,
+        ):
+            response = self.client.get("/?q=mystery+movies&per_page=12")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Closest match", response.data)
+        self.assertNotIn(b"Exact match", response.data)
+        record = write_record.call_args.args[0]
+        self.assertIn("expand-retrieve", [item["stage"] for item in record["errors"]])
+        self.assertGreater(record["candidate_counts"]["filtered"], 0)
+        self.assertNotIn("remote_addr", record)
+
+    def test_explanation_exception_keeps_results_and_supplies_a_fallback_reason(self):
+        with patch("app.build_match_reasons", side_effect=RuntimeError("explanation failed")):
+            response = self.client.get("/?q=space+movies&per_page=12")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'class="movie-card__reasons"', response.data)
+
+    def test_exact_label_is_downgraded_when_the_displayed_score_is_below_threshold(self):
+        original_rank = rank_movies
+
+        def lower_scores(*args, **kwargs):
+            ranking = original_rank(*args, **kwargs)
+            for entry in ranking["results"]:
+                entry["percent"] = 20
+            return ranking
+
+        with patch("app.rank_movies", side_effect=lower_scores):
+            response = self.client.get("/?q=The+Godfather&per_page=12")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"20%", response.data)
+        self.assertNotIn(b"Exact match", response.data)
+
+    def test_template_exception_returns_a_clear_non_5xx_response(self):
+        with patch("app.render_template", side_effect=RuntimeError("render failed")):
+            response = self.client.get("/?q=space+movies")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Search could not safely prepare results", response.data)
+
+    def test_adversarial_query_and_pagination_inputs_do_not_crash(self):
+        cases = (
+            "   ", "x", "😀🎬🍿", "<script>alert(1)</script>",
+            "' OR 1=1 --", "under 999999999999999999 minutes",
+            "movies after -100", "hello 世界 مرحبا", "comedy " * 200,
+        )
+        for query in cases:
+            with self.subTest(query=query[:40]):
+                response = self.client.get("/?q=" + quote(query) + "&page=-1&per_page=invalid")
+                self.assertLess(response.status_code, 500)
+        markup = self.client.get("/?q=" + quote("<script>alert(1)</script>"))
+        self.assertNotIn(b"<script>alert(1)</script>", markup.data)
 
     def test_exact_and_leading_article_title_queries_return_only_the_title(self):
         for query, expected_title in (
@@ -226,18 +316,23 @@ class SearchRouteTests(unittest.TestCase):
             ("The Hangover under 101 minutes", "The Hangover"),
             ("The Matrix under 137 minutes", "The Matrix"),
             ("The Avengers under 144 minutes", "The Avengers"),
+            ("Get Out under 105 minutes", "Get Out"),
             ("American History X", "American History X"),
             ("the American Beauty", "American Beauty"),
             ("No Country for Old Men", "No Country for Old Men"),
             ("the No Country for Old Men", "No Country for Old Men"),
             ("Zodiac under 158 minutes", "Zodiac"),
+            ("What s Eating Gilbert Grape", "What's Eating Gilbert Grape"),
         ):
             with self.subTest(query=query):
                 response = self.client.get("/?q=" + quote(query) + "&per_page=48")
-                titles = re.findall(
-                    r'data-detail-title="([^"]+)"',
-                    response.get_data(as_text=True),
-                )
+                titles = [
+                    unescape(title)
+                    for title in re.findall(
+                        r'data-detail-title="([^"]+)"',
+                        response.get_data(as_text=True),
+                    )
+                ]
                 self.assertEqual(titles, [expected_title])
 
     def test_title_prefix_matches_partial_final_word_without_shorter_aliases(self):
@@ -248,7 +343,16 @@ class SearchRouteTests(unittest.TestCase):
         )
         self.assertIn("The Lion King", titles)
         self.assertNotIn("Lion", titles)
+        self.assertIn(b'data-i18n="closestMatch"', response.data)
         self.assertEqual(find_title_matches("scary movie movies", MOVIES), [])
+
+    def test_title_evidence_requires_the_complete_title_phrase(self):
+        self.assertTrue(_contains_complete_title(
+            "Synthetic Orchard under 100 minutes", "Synthetic Orchard",
+        ))
+        self.assertFalse(_contains_complete_title(
+            "Synthetic Orch", "Synthetic Orchard",
+        ))
 
     def test_unsupported_cast_and_certification_filters_are_explained(self):
         for query in ("movies starring a person", "movies rated PG-13"):
@@ -472,7 +576,7 @@ class SearchRouteTests(unittest.TestCase):
         response = self.client.get("/?q=a+movie+where+there+is+no+woman&per_page=12")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"We couldn&#39;t find a movie that exactly matches your request", response.data)
-        self.assertIn(b"30 closest matches", response.data)
+        self.assertIn(b"0 exact, 30 close, 0 related", response.data)
         self.assertIn(b"Unverified", response.data)
         self.assertIn(b"MOVIE_FINDER_GROUP4", response.data)
         self.assertNotIn(b"Where There Is Life", response.data)
@@ -500,7 +604,7 @@ class SearchRouteTests(unittest.TestCase):
         with patch("app.MOVIES", [movie]):
             response = self.client.get("/?q=a+movie+where+there+is+no+woman&per_page=12")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"0 closest matches", response.data)
+        self.assertIn(b"0 exact, 0 close, 0 related", response.data)
         self.assertNotIn(b"Contradicted Film", response.data)
 
     def test_female_lead_query_renders_positive_cast_evidence(self):

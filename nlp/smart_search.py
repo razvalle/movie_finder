@@ -13,8 +13,22 @@ import threading
 import time
 from collections import Counter, OrderedDict, defaultdict, deque
 from difflib import SequenceMatcher
+from functools import lru_cache
 from pathlib import Path
 
+from data.synonyms import (
+    CONTENT_DESCRIPTOR_SYNONYMS,
+    GENRE_SYNONYMS,
+    MOOD_SYNONYMS,
+    THEME_SYNONYMS,
+)
+from data.movies import MOVIES as _STARTUP_MOVIES
+from .concepts import (
+    MAX_EXPANSION_WEIGHT,
+    expand_query,
+    load_concept_table,
+    normalize_phrase,
+)
 from .normalize import normalize_text
 from .query import EXPLICIT_SYNTAX_TOKENS, build_structured_query
 from .runtime import WORD_NUMBERS
@@ -27,6 +41,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 EMBEDDINGS_PATH = ROOT_DIR / "data" / "movie_embeddings.json.gz"
 MAX_QUERY_LENGTH = 500
 MAX_CANDIDATES = 30
+# A full label requires verified constraints, strong term evidence, and >=80%.
+EXACT_MATCH_THRESHOLD = 80
 CACHE_SECONDS = 600
 CACHE_SIZE = 512
 RATE_LIMIT_REQUESTS = 30
@@ -35,6 +51,7 @@ _REDIS_CLIENT = None
 _REDIS_URL = None
 _REDIS_LOCK = threading.Lock()
 _LOGGER = logging.getLogger(__name__)
+CONCEPT_TABLE = load_concept_table(_STARTUP_MOVIES)
 
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
@@ -143,6 +160,7 @@ STOP_WORDS = {
     "without", "except", "excluding", "avoid", "avoiding", "never", "must",
     "only", "there", "thing", "things",
     "ending", "end", "story",
+    "gusto", "ko", "ng", "na",
 }
 
 
@@ -423,10 +441,323 @@ def _movie_text(movie):
         movie.get("title", ""), movie.get("original_title", ""),
         movie.get("synopsis", ""), movie.get("overview", ""), movie.get("tagline", ""),
         " ".join(str(genre) for genre in movie.get("genres", [])),
+        " ".join(str(theme) for theme in movie.get("themes", [])),
+        " ".join(str(mood) for mood in movie.get("mood_tags", [])),
         " ".join(str(keyword) for keyword in movie.get("keywords", [])),
         " ".join(cast_text),
     ]
     return " ".join(field for field in fields if field)
+
+
+@lru_cache(maxsize=32768)
+def _cached_text_tokens(text):
+    return tuple(re.findall(r"[a-z0-9]+", normalize_text(str(text)).casefold()))
+
+
+def _text_tokens(text):
+    return list(_cached_text_tokens(str(text)))
+
+
+def _search_fields(movie):
+    title_forms = {
+        normalize_phrase(value)
+        for value in (movie.get("title", ""), movie.get("original_title", ""))
+        if value
+    }
+    fields = [
+        ("title", movie.get("title", "")),
+        ("title", movie.get("original_title", "")),
+        ("synopsis", movie.get("synopsis", "") or movie.get("overview", "")),
+        ("synopsis", movie.get("tagline", "")),
+    ]
+    for kind, field in (("theme", "themes"), ("keyword", "keywords"), ("genre", "genres")):
+        fields.extend(
+            (kind, value)
+            for value in movie.get(field, []) or []
+            if normalize_phrase(value) not in title_forms
+        )
+    return [(kind, str(value)) for kind, value in fields if value]
+
+
+def _make_search_vocabulary(movies):
+    """Build word and compound support from catalog text and local synonyms."""
+    word_support = Counter()
+    compound_support = Counter()
+    for movie in movies:
+        for _, text in _search_fields(movie):
+            tokens = _text_tokens(text)
+            word_support.update(tokens)
+            for size in range(2, min(4, len(tokens)) + 1):
+                for start in range(len(tokens) - size + 1):
+                    compound_support["".join(tokens[start:start + size])] += 1
+    for table in (
+        GENRE_SYNONYMS, MOOD_SYNONYMS, THEME_SYNONYMS,
+        CONTENT_DESCRIPTOR_SYNONYMS,
+    ):
+        for canonical, forms in table.items():
+            for phrase in {canonical, *forms}:
+                tokens = _text_tokens(phrase)
+                word_support.update(tokens)
+                if 2 <= len(tokens) <= 4:
+                    compound_support["".join(tokens)] += 1
+    return word_support, compound_support
+
+
+def _split_unknown_word(word, word_support):
+    choices = []
+    for offset in range(2, len(word) - 1):
+        left, right = word[:offset], word[offset:]
+        if len(left) < 3 or len(right) < 3 or left not in word_support or right not in word_support:
+            continue
+        choices.append((-(word_support[left] + word_support[right]), left, right))
+    if not choices:
+        return [word]
+    _, left, right = min(choices)
+    return [left, right]
+
+
+def _normalize_query_concepts(raw_query, understanding, movies):
+    required = understanding.get("required_terms") or []
+    if required:
+        source_terms = required
+    else:
+        structured_terms = set(understanding.get("genres", [])) | set(understanding.get("mood_tone", []))
+        exclusions = _negative_query_terms(understanding)
+        source_terms = [
+            token for token in _text_tokens(_remove_negated_concepts(raw_query))
+            if token not in STOP_WORDS and token not in structured_terms
+            and token not in exclusions and token not in EXPLICIT_SYNTAX_TOKENS
+            and len(token) > 1
+            and not re.fullmatch(r"(?:\d{2,4})s?", token)
+        ]
+    if not source_terms:
+        return {"concepts": [], "terms": [], "variant": "", "variant_applied": False}
+    index = _get_bm25_index(movies)
+    word_support = index["word_support"]
+    compound_support = index["compound_support"]
+    terms = []
+    variant_applied = False
+    for term_index, term in enumerate(source_terms):
+        normalized_term = normalize_text(term)
+        if "-" in normalized_term:
+            variant_applied = True
+        for piece in _text_tokens(normalized_term):
+            if piece not in word_support:
+                split = _split_unknown_word(piece, word_support)
+                if len(split) > 1:
+                        terms.extend(split)
+                        variant_applied = True
+                else:
+                        closest = max(
+                            word_support,
+                            key=lambda candidate: (
+                                SequenceMatcher(None, piece, candidate).ratio()
+                                if abs(len(piece) - len(candidate)) <= 2 else 0.0,
+                                candidate,
+                            ),
+                            default=piece,
+                        )
+                        if (
+                            len(piece) >= 4
+                            and len(closest) >= 4
+                            and SequenceMatcher(None, piece, closest).ratio() >= 0.78
+                        ):
+                            neighboring_terms = []
+                            if term_index > 0:
+                                neighboring_terms.extend(_text_tokens(source_terms[term_index - 1]))
+                            if term_index + 1 < len(source_terms):
+                                neighboring_terms.extend(_text_tokens(source_terms[term_index + 1]))
+                            phrase_supported = any(
+                                compound_support.get(neighbor + closest, 0)
+                                or compound_support.get(closest + neighbor, 0)
+                                for neighbor in neighboring_terms
+                            )
+                            if closest not in STOP_WORDS or phrase_supported:
+                                terms.append(closest)
+                                variant_applied = True
+                        elif required and closest not in STOP_WORDS:
+                            terms.append(piece)
+            elif compound_support.get(piece, 0):
+                variants = [
+                    (word_support.get(left, 0) + word_support.get(right, 0), left, right)
+                    for offset in range(2, len(piece) - 1)
+                    for left, right in [(piece[:offset], piece[offset:])]
+                    if left in word_support and right in word_support
+                    and compound_support.get(left + right, 0)
+                ]
+                if variants:
+                    _, left, right = max(variants, key=lambda item: (item[0], item[1], item[2]))
+                    terms.extend((left, right))
+                    variant_applied = True
+                else:
+                    terms.append(piece)
+            else:
+                terms.append(piece)
+
+    concepts = []
+    offset = 0
+    while offset < len(terms):
+        compound = next((
+            terms[offset:offset + size]
+            for size in range(min(4, len(terms) - offset), 1, -1)
+            if compound_support.get("".join(terms[offset:offset + size]), 0)
+        ), None)
+        if compound:
+            concepts.append(compound)
+            offset += len(compound)
+        else:
+            concepts.append([terms[offset]])
+            offset += 1
+    normalized_terms = list(dict.fromkeys(word for concept in concepts for word in concept))
+    original = " ".join(_text_tokens(" ".join(source_terms)))
+    normalized = " ".join(normalized_terms)
+    variant_applied = variant_applied or original != normalized
+    return {
+        "concepts": concepts,
+        "terms": normalized_terms,
+        "variant": normalized if variant_applied else "",
+        "variant_applied": variant_applied,
+    }
+
+
+def _direct_query_concepts(normalization, understanding):
+    concepts = [list(concept) for concept in normalization.get("concepts", ())]
+    seen = {
+        CONCEPT_TABLE.get("aliases", {}).get(" ".join(concept), " ".join(concept))
+        for concept in concepts
+    }
+    for preference in understanding.get("soft_preferences", ()):
+        phrase = normalize_phrase(
+            preference.get("value", "") if isinstance(preference, dict) else preference
+        )
+        if not phrase:
+            continue
+        canonical = CONCEPT_TABLE.get("aliases", {}).get(phrase, phrase)
+        aliases = CONCEPT_TABLE.get("concepts", {}).get(canonical, {}).get("aliases", ())
+        if not any(
+            alias.get("category") == "theme"
+            for alias in aliases if isinstance(alias, dict)
+        ):
+            continue
+        if canonical in seen:
+            continue
+        concept = _text_tokens(phrase)
+        if concept:
+            concepts.append(concept)
+            seen.add(canonical)
+    return concepts
+
+
+def _query_evidence(movie, concepts, expansions=()):
+    if not concepts and not expansions:
+        return {
+            "concepts": [], "requirements": [], "score": 0.0,
+            "strength": 0.0, "strong": True, "details": [],
+            "associated_details": [], "associated_count": 0,
+        }
+    fields = _search_fields(movie)
+    details = []
+    scores = []
+    all_strong = True
+    for concept in concepts:
+        label = " ".join(concept)
+        matches = []
+        for kind, text in fields:
+            tokens = _text_tokens(text)
+            for start in range(len(tokens) - len(concept) + 1):
+                if tokens[start:start + len(concept)] != concept:
+                    continue
+                exact_tag = kind in {"theme", "keyword"} and tokens == concept
+                if kind == "synopsis":
+                    strength = 0.9 if len(concept) > 1 else 0.72
+                elif exact_tag:
+                    strength = 1.0
+                elif kind in {"theme", "keyword"} and len(concept) > 1:
+                    strength = 0.9
+                elif kind in {"theme", "keyword", "genre"}:
+                    strength = 0.5
+                else:
+                    strength = 0.25
+                matches.append((
+                    strength,
+                    kind,
+                    kind == "synopsis" or exact_tag or (
+                        kind in {"theme", "keyword"} and len(concept) > 1
+                    ),
+                    label,
+                ))
+                break
+        if not matches and len(concept) > 1:
+            anchor = concept[-1]
+            for kind, text in fields:
+                if anchor not in _text_tokens(text):
+                    continue
+                strength = (
+                    0.55 if kind == "synopsis"
+                    else 0.5 if kind in {"theme", "keyword", "genre"}
+                    else 0.25
+                )
+                matches.append((strength, kind, False, anchor))
+        if matches:
+            strength, source, strong, matched_label = max(
+                matches, key=lambda item: (item[0], item[2], item[1])
+            )
+            scores.append(strength)
+            all_strong = all_strong and strong
+            details.append({
+                "phrase": matched_label, "source": source, "strength": strength, "strong": strong,
+            })
+        else:
+            scores.append(0.0)
+            all_strong = False
+    associated_details = []
+    associated_strengths = []
+    associated_terms = set()
+    for expansion in expansions:
+        phrase = expansion.get("term", "")
+        tokens = _text_tokens(phrase)
+        if not tokens:
+            continue
+        matches = []
+        for kind, text in fields:
+            if kind == "title":
+                continue
+            text_tokens = _text_tokens(text)
+            if any(
+                text_tokens[start:start + len(tokens)] == tokens
+                for start in range(len(text_tokens) - len(tokens) + 1)
+            ):
+                field_strength = 0.9 if kind == "synopsis" else 1.0 if (
+                    kind in {"theme", "keyword"} and text_tokens == tokens
+                ) else 0.65
+                matches.append((field_strength, kind))
+        if not matches:
+            continue
+        field_strength, source = max(matches, key=lambda match: (match[0], match[1]))
+        association_weight = float(expansion.get("association_weight", 0.0))
+        evidence_strength = min(MAX_EXPANSION_WEIGHT, association_weight * field_strength)
+        associated_strengths.append(evidence_strength)
+        associated_terms.add(phrase)
+        associated_details.append({
+            "phrase": phrase,
+            "source": source,
+            "strength": evidence_strength,
+            "concept": expansion.get("concept", ""),
+        })
+    direct_score = sum(scores) / len(scores) if scores else 0.0
+    association_score = max(associated_strengths, default=0.0)
+    combined_score = max(direct_score, association_score)
+    direct_strong = bool(concepts) and all_strong and len(details) == len(concepts)
+    return {
+        "concepts": details,
+        "requirements": [" ".join(concept) for concept in concepts],
+        "score": combined_score,
+        "strength": max(max(scores, default=0.0), association_score),
+        "strong": direct_strong,
+        "details": details,
+        "associated_details": associated_details,
+        "associated_count": len(associated_terms),
+    }
 
 
 def _make_bm25_index(movies):
@@ -439,10 +770,13 @@ def _make_bm25_index(movies):
         vocabulary.update(frequencies)
         for token, frequency in frequencies.items():
             postings[token].append((position, frequency))
+    word_support, compound_support = _make_search_vocabulary(movies)
     return {
         "postings": dict(postings),
         "lengths": document_lengths,
         "vocabulary": vocabulary,
+        "word_support": word_support,
+        "compound_support": compound_support,
         "average_length": sum(document_lengths) / max(1, len(document_lengths)),
         "count": len(movies),
     }
@@ -576,11 +910,12 @@ def _fuzzy_term_map(terms, vocabulary):
     return mapping
 
 
-def _bm25_scores(terms, index):
+def _bm25_scores(terms, index, weights=None):
     scores = defaultdict(float)
     count = index["count"]
     average_length = index["average_length"] or 1
     for term in terms:
+        weight = (weights or {}).get(term, 1.0)
         documents = index["postings"].get(term, ())
         if not documents:
             continue
@@ -589,7 +924,7 @@ def _bm25_scores(terms, index):
         for position, frequency in documents:
             length = index["lengths"][position]
             denominator = frequency + 1.5 * (1 - 0.75 + 0.75 * length / average_length)
-            scores[position] += inverse_frequency * frequency * 2.5 / denominator
+            scores[position] += weight * inverse_frequency * frequency * 2.5 / denominator
     return scores
 
 
@@ -663,11 +998,64 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
                 "search_score": score / similar[0][0] * 100,
                 "match_reason": f"TF-IDF metadata similarity to {understanding.get('similar_to')}.",
                 "relevance_score": score,
+                "query_evidence": {
+                    "concepts": [], "score": score / similar[0][0],
+                    "strength": score / similar[0][0], "strong": False, "details": [],
+                },
+                "normalized_terms": [],
+                "normalized_query": "",
+                "evidence_strength": score / similar[0][0],
                 "fallback_only": False,
             } for score, _, movie in similar[:limit]]
-    terms = _query_terms(raw_query, understanding)
-    terms = list(dict.fromkeys(terms + _similar_movie_terms(understanding, movies)))
-    raw_terms = _raw_query_terms_from_understanding(raw_query, understanding)
+    normalization = _normalize_query_concepts(raw_query, understanding, movies)
+    concepts = _direct_query_concepts(normalization, understanding)
+    base_understanding = dict(understanding)
+    base_understanding["expanded_concepts"] = []
+    direct_terms = _query_terms(raw_query, base_understanding)
+    original_required_terms = set(simple_word_tokens(" ".join(understanding.get("required_terms") or [])))
+    direct_terms = [
+        term for term in direct_terms
+        if term not in original_required_terms
+    ]
+    direct_terms = list(dict.fromkeys(
+        direct_terms
+        + normalization["terms"]
+        + [word for concept in concepts for word in concept]
+        + _similar_movie_terms(understanding, movies)
+    ))
+    excluded_terms = _negative_query_terms(understanding)
+    concept_expansions = expand_query(concepts, understanding, CONCEPT_TABLE, excluded_terms)
+    expansion_weights = {}
+    for expansion in concept_expansions:
+        for word in simple_word_tokens(expansion["term"]):
+            if word not in excluded_terms and word not in STOP_WORDS and word not in direct_terms:
+                expansion_weights[word] = max(expansion_weights.get(word, 0.0), expansion["weight"])
+    synonym_expansions = []
+    for phrase in understanding.get("expanded_concepts", ()):
+        for word in simple_word_tokens(phrase):
+            if word not in excluded_terms and word not in STOP_WORDS and word not in direct_terms:
+                expansion_weights[word] = max(expansion_weights.get(word, 0.0), MAX_EXPANSION_WEIGHT)
+                synonym_expansions.append({
+                    "term": word,
+                    "concept": " ".join(concepts[0]) if concepts else "",
+                    "association_weight": MAX_EXPANSION_WEIGHT,
+                    "source": "hand-written",
+                })
+    total_expansion_weight = sum(expansion_weights.values())
+    if total_expansion_weight > MAX_EXPANSION_WEIGHT:
+        scale = MAX_EXPANSION_WEIGHT / total_expansion_weight
+        expansion_weights = {
+            term: weight * scale for term, weight in expansion_weights.items()
+        }
+    search_expansions = [
+        expansion for expansion in concept_expansions
+        if any(word in expansion_weights for word in simple_word_tokens(expansion["term"]))
+    ] + synonym_expansions
+    term_weights = {term: 1.0 for term in direct_terms}
+    for term, weight in expansion_weights.items():
+        term_weights[term] = max(term_weights.get(term, 0.0), weight)
+    terms = list(term_weights)
+    raw_terms = normalization["terms"]
     structured_terms = set(understanding.get("genres", [])) | set(understanding.get("mood_tone", []))
     if (
         not understanding.get("required_terms")
@@ -680,16 +1068,20 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
     lexical_scores = {}
     if len(movies) <= 5000:
         lexical_index = _get_bm25_index(movies)
-        query_terms = _fuzzy_terms(terms, lexical_index["vocabulary"])
-        lexical_scores = _bm25_scores(query_terms, lexical_index)
+        direct_query_terms = sorted(_fuzzy_terms(direct_terms, lexical_index["vocabulary"]))
+        weighted_query_terms = {term: 1.0 for term in direct_query_terms}
+        for term, weight in sorted(expansion_weights.items()):
+            if term in lexical_index["vocabulary"]:
+                weighted_query_terms[term] = max(weighted_query_terms.get(term, 0.0), weight)
+        lexical_scores = _bm25_scores(weighted_query_terms, lexical_index, weighted_query_terms)
     elif tfidf_model:
-        query_vector = vectorize_query(terms, tfidf_model["idf"])
+        direct_query_terms = sorted(_fuzzy_terms(direct_terms, tfidf_model["idf"].keys()))
+        query_vector = vectorize_query(direct_query_terms, tfidf_model["idf"])
+        for term, weight in sorted(expansion_weights.items()):
+            expanded_vector = vectorize_query([term], tfidf_model["idf"])
+            for vector_term, vector_weight in expanded_vector.items():
+                query_vector[vector_term] = query_vector.get(vector_term, 0.0) + vector_weight * weight
         query_norm = vector_norm(query_vector) if query_vector else 0.0
-        vocabulary = tfidf_model["idf"].keys()
-        fuzzy_terms = _fuzzy_terms(terms, vocabulary)
-        if fuzzy_terms - set(terms):
-            query_vector = vectorize_query(list(fuzzy_terms), tfidf_model["idf"])
-            query_norm = vector_norm(query_vector) if query_vector else 0.0
         lexical_scores = {
             position: score
             for position, movie in enumerate(movies)
@@ -704,9 +1096,21 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
 
     rank_lists = []
     if lexical_scores:
-        rank_lists.append((sorted(lexical_scores, key=lexical_scores.get, reverse=True), 1.0))
+        rank_lists.append((sorted(
+            lexical_scores,
+            key=lambda position: (
+                -lexical_scores[position], str(movies[position].get("title", "")).casefold(),
+                str(movies[position].get("id", "")),
+            ),
+        ), 1.0))
     if title_scores:
-        rank_lists.append((sorted(title_scores, key=title_scores.get, reverse=True), 1.4))
+        rank_lists.append((sorted(
+            title_scores,
+            key=lambda position: (
+                -title_scores[position], str(movies[position].get("title", "")).casefold(),
+                str(movies[position].get("id", "")),
+            ),
+        ), 1.4))
 
     fused_scores = defaultdict(float)
     for positions, weight in rank_lists:
@@ -716,52 +1120,184 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
     if not fused_scores:
         return []
 
-    if len(raw_terms) >= 2:
-        vocabulary = lexical_index["vocabulary"] if len(movies) <= 5000 else tfidf_model["idf"].keys()
-        fuzzy_map = _fuzzy_term_map(raw_terms, vocabulary)
+    evidence_by_position = {
+        position: _query_evidence(movies[position], concepts, search_expansions)
+        for position in fused_scores
+    }
+    if concepts:
         qualified = {}
-        required = [fuzzy_map.get(term, term) for term in understanding.get("required_terms") or []]
         for position, score in fused_scores.items():
-            movie_terms = set(simple_word_tokens(_movie_text(movies[position])))
-            if required and title_scores.get(position, 0) < 0.85 and not all(term in movie_terms for term in required):
-                continue
-            matched_count = sum(1 for term in raw_terms if fuzzy_map[term] in movie_terms)
+            evidence = evidence_by_position[position]
+            matched_count = sum(
+                1 for detail in evidence["details"] if detail["strength"] > 0
+            )
             if "road trip" in understanding.get("hard_constraints", []):
                 searchable_text = normalize_text(_movie_text(movies[position]))
                 has_catalog_evidence = bool(re.search(r"\broad(?:\s+|-)?trip\b", searchable_text))
                 has_local_hint = title_scores.get(position, 0) >= 0.85
                 if not has_catalog_evidence and not has_local_hint:
                     continue
-            if title_scores.get(position, 0) >= 0.85 or matched_count / len(raw_terms) >= 0.65:
+            has_strong_direct = evidence["strong"]
+            has_title_phrase = any(
+                detail["source"] == "title" and len(_text_tokens(detail["phrase"])) > 1
+                for detail in evidence["details"]
+            )
+            has_non_title_evidence = any(
+                detail["source"] != "title" and detail["strength"] > 0
+                for detail in evidence["details"]
+            )
+            has_title_evidence = any(
+                detail["source"] == "title" and detail["strength"] > 0
+                for detail in evidence["details"]
+            )
+            has_related_evidence = evidence["associated_count"] >= 2
+            if (
+                matched_count / len(concepts) >= 0.65
+                and (
+                    has_strong_direct or has_title_phrase
+                    or has_non_title_evidence or has_title_evidence
+                )
+            ) or has_related_evidence:
                 qualified[position] = score
         fused_scores = qualified
+        evidence_by_position = {
+            position: evidence_by_position[position] for position in fused_scores
+        }
         if not fused_scores:
             return []
 
-    ordered = sorted(fused_scores, key=fused_scores.get, reverse=True)[:limit]
+    ordered = sorted(
+        fused_scores,
+        key=lambda position: (
+            -evidence_by_position.get(position, {}).get("strength", 0.0),
+            -fused_scores[position],
+            -(movies[position].get("average_rating") or 0),
+            -(movies[position].get("vote_count") or 0),
+            str(movies[position].get("title", "")).casefold(),
+            str(movies[position].get("id", "")),
+        ),
+    )[:limit]
     max_score = max((fused_scores[position] for position in ordered), default=1.0) or 1.0
     results = []
     for position in ordered:
         movie = movies[position]
         score = fused_scores[position] / max_score * 100
-        reason = _fallback_reason(movie, terms, understanding)
+        evidence = evidence_by_position.get(position, {
+            "concepts": [], "score": 0.0, "strength": 0.0, "strong": True, "details": [],
+        })
+        reason = _fallback_reason(movie, terms, understanding, evidence)
         results.append({
             "movie": movie,
             "search_score": score,
             "match_reason": reason,
-            "relevance_score": None,
+            "relevance_score": lexical_scores.get(position),
+            "query_evidence": evidence,
+            "normalized_terms": normalization["terms"],
+            "normalized_query": normalization["variant"],
+            "evidence_strength": evidence.get("strength", 0.0),
             "fallback_only": fallback_only,
         })
     return results
 
 
-def _fallback_reason(movie, terms, understanding):
-    searchable = set(simple_word_tokens(_movie_text(movie)))
-    matched = [term for term in terms if term in searchable]
-    if matched:
-        return "The available synopsis or metadata overlaps with the description."
+def retrieve_plain_candidates(raw_query, understanding, movies, tfidf_model=None, limit=MAX_CANDIDATES):
+    """Retrieve direct lexical, fuzzy, title, then local TF-IDF fallbacks without expansion."""
+    if not movies:
+        return []
+    direct_understanding = dict(understanding or {})
+    direct_understanding["expanded_concepts"] = []
+    direct_understanding["keywords"] = []
+    terms = _query_terms(raw_query[:MAX_QUERY_LENGTH], direct_understanding)
+    if not terms:
+        terms = [
+            term for term in _text_tokens(_remove_negated_concepts(raw_query[:MAX_QUERY_LENGTH]))
+            if term not in STOP_WORDS and term not in EXPLICIT_SYNTAX_TOKENS and len(term) > 1
+        ]
+    scores = {}
+    if terms:
+        index = _get_bm25_index(movies)
+        direct_terms = sorted(_fuzzy_terms(terms, index["vocabulary"]))
+        scores = _bm25_scores(direct_terms, index)
+    title_scores = _title_scores(direct_understanding, movies)
+    ranked_positions = set(scores) | set(title_scores)
+    method = "plain-bm25"
+    if not ranked_positions and tfidf_model and terms:
+        fuzzy_terms = sorted(_fuzzy_terms(terms, tfidf_model.get("idf", {}).keys()))
+        query_vector = vectorize_query(fuzzy_terms, tfidf_model["idf"])
+        query_norm = vector_norm(query_vector) if query_vector else 0.0
+        scores = {
+            position: score
+            for position, movie in enumerate(movies)
+            if (score := cosine_similarity(
+                query_vector,
+                tfidf_model.get("vectors", {}).get(movie.get("id"), {}),
+                query_norm,
+                tfidf_model.get("norms", {}).get(movie.get("id")),
+            )) > 0
+        }
+        ranked_positions = set(scores)
+        method = "tfidf-nearest"
+    ordered = sorted(
+        ranked_positions,
+        key=lambda position: (
+            -(scores.get(position, 0.0) + title_scores.get(position, 0.0)),
+            -(movies[position].get("average_rating") or 0),
+            -(movies[position].get("vote_count") or 0),
+            str(movies[position].get("title", "")).casefold(),
+            str(movies[position].get("id", "")),
+        ),
+    )[:limit]
+    maximum = max(
+        (scores.get(position, 0.0) + title_scores.get(position, 0.0) for position in ordered),
+        default=1.0,
+    ) or 1.0
+    return [{
+        "movie": movies[position],
+        "search_score": (
+            scores.get(position, 0.0) + title_scores.get(position, 0.0)
+        ) / maximum * 100,
+        "match_reason": (
+            "Closest available result from direct catalog text."
+            if method == "plain-bm25"
+            else "Closest available result by local TF-IDF metadata similarity."
+        ),
+        "relevance_score": scores.get(position),
+        "normalized_terms": terms,
+        "normalized_query": "",
+        "evidence_strength": 0.0,
+        "fallback_only": True,
+        "fallback_method": method,
+    } for position in ordered]
+
+
+def _fallback_reason(movie, terms, understanding, evidence=None):
+    if evidence and evidence.get("details"):
+        detail = evidence["details"][0]
+        source = {
+            "synopsis": "the synopsis",
+            "theme": "a theme tag",
+            "keyword": "a keyword tag",
+            "genre": "a genre tag",
+            "title": "the title",
+        }.get(detail["source"], "movie metadata")
+        return f'Matched "{detail["phrase"]}" in {source}.'
+    if evidence and evidence.get("associated_details"):
+        detail = evidence["associated_details"][0]
+        source = {
+            "synopsis": "the synopsis",
+            "theme": "a theme tag",
+            "keyword": "a keyword tag",
+            "genre": "a genre tag",
+        }.get(detail["source"], "movie metadata")
+        return (
+            f'Related evidence includes "{detail["phrase"]}" in {source}, '
+            f'associated with "{detail["concept"]}".'
+        )
     if any(hint.casefold() in movie.get("title", "").casefold() for hint in understanding["example_titles"]):
         return "Matched a likely title hint from your description."
+    searchable = set(simple_word_tokens(_movie_text(movie)))
+    if any(term in searchable for term in terms):
+        return "The available movie metadata overlaps with the description."
     return "No direct plot evidence was found in the available metadata."
 
 
@@ -850,45 +1386,117 @@ def _basic_assessment(raw_query, candidate, understanding):
         else:
             unverifiable.append(constraint)
 
-    query_terms = _query_terms(raw_query, understanding)
-    matched = [term for term in query_terms if term in movie_terms and term not in STOP_WORDS]
-    for term in understanding.get("required_terms", []):
-        if term in movie_terms:
-            satisfied.append(f"keyword {term}")
-        else:
-            unverifiable.append(f"keyword {term}")
+    verified_constraint_count = len(satisfied)
+    checked_constraint_count = len(satisfied) + len(unsatisfied) + len(unverifiable)
+    query_evidence = candidate.get("query_evidence")
+    if query_evidence is None:
+        normalization = _normalize_query_concepts(raw_query, understanding, [movie])
+        query_evidence = _query_evidence(movie, normalization["concepts"])
+    requirements = query_evidence.get("requirements", [])
+    for detail in query_evidence.get("details", []):
+        phrase = detail["phrase"]
+        if detail["strong"]:
+            source = {
+                "synopsis": "synopsis",
+                "theme": "theme tag",
+                "keyword": "keyword tag",
+                "genre": "genre tag",
+                "title": "title",
+            }.get(detail["source"], "movie metadata")
+            evidence_kind = "phrase" if len(phrase.split()) > 1 else "term"
+            satisfied.append(f'{phrase} {evidence_kind} in {source}')
+        elif detail["strength"]:
+            is_phrase_component = any(
+                len(requirement.split()) > 1 and phrase in requirement.split()
+                for requirement in requirements
+            )
+            if not is_phrase_component:
+                unverifiable.append(f"strong evidence for {phrase}")
+    concepts = query_evidence.get("concepts", [])
+    matched_phrases = {detail["phrase"] for detail in query_evidence.get("details", [])}
+    for phrase in requirements:
+        if phrase not in matched_phrases:
+            unverifiable.append(f"keyword {phrase}")
+
     reason_parts = []
     if satisfied:
         reason_parts.append("It meets " + ", ".join(satisfied[:2]))
-    if matched:
-        reason_parts.append("the available metadata mentions " + ", ".join(dict.fromkeys(matched[:3])))
+    weak_evidence = [
+        f'{item["phrase"]} in {item["source"]}'
+        for item in query_evidence.get("details", [])
+        if not item["strong"] and item["strength"]
+    ]
+    weak_evidence.extend(
+        f'{item["phrase"]} in {item["source"]} (associated with {item["concept"]})'
+        for item in query_evidence.get("associated_details", [])
+    )
+    if weak_evidence:
+        reason_parts.append(
+            ("related evidence is " if not query_evidence.get("details") else "weaker evidence is ")
+            + ", ".join(weak_evidence[:2])
+        )
     missing = list(dict.fromkeys(unverifiable + unsatisfied))
     if missing:
         reason_parts.append("but does not verify " + ", ".join(missing[:3]))
-    reason = "; ".join(reason_parts) + "." if reason_parts else _fallback_reason(movie, query_terms, understanding)
+    reason = "; ".join(reason_parts) + "." if reason_parts else _fallback_reason(
+        movie, _query_terms(raw_query, understanding), understanding, query_evidence,
+    )
     if not reason.endswith("."):
         reason += "."
-    # Overlap terms are retrieval evidence, not checked constraints.
     checked = bool(satisfied or unsatisfied or unverifiable)
-    exact = checked and not unsatisfied and not unverifiable
+    if candidate.get("percent") is not None:
+        estimated_percent = candidate["percent"]
+    elif query_evidence.get("concepts") or query_evidence.get("associated_details"):
+        evidence_percent = query_evidence.get("score", 0.0) * 100
+        if checked_constraint_count:
+            constraint_percent = verified_constraint_count / checked_constraint_count * 100
+            estimated_percent = round((evidence_percent + constraint_percent) / 2)
+        else:
+            estimated_percent = round(evidence_percent)
+    elif checked_constraint_count:
+        estimated_percent = round(verified_constraint_count / checked_constraint_count * 100)
+    else:
+        estimated_percent = 0
+    required_terms_supported = query_evidence.get("strong", True)
+    eligible_for_full = (
+        checked and not unsatisfied and not unverifiable and required_terms_supported
+        and not candidate.get("fallback_only")
+    )
+    exact = eligible_for_full and estimated_percent >= EXACT_MATCH_THRESHOLD
+    match_tier = (
+        "exact" if exact
+        else "related" if query_evidence.get("associated_count", 0) >= 2
+        and not query_evidence.get("details")
+        else "close"
+    )
     return {
         "match_level": "full" if exact else "partial",
-        "satisfied": list(dict.fromkeys(satisfied + ([f"metadata overlap: {term}" for term in matched[:3]]))),
+        "match_tier": match_tier,
+        "match_eligible": eligible_for_full,
+        "estimated_percent": estimated_percent,
+        "evidence_strength": query_evidence.get("strength", 0.0),
+        "satisfied": list(dict.fromkeys(satisfied)),
         "unsatisfied": list(dict.fromkeys(unsatisfied)),
         "unverifiable": list(dict.fromkeys(unverifiable)),
-        "confidence": min(70, 35 + 8 * len(matched) + 5 * len(satisfied)),
+        "confidence": min(95, 25 + round(query_evidence.get("score", 0.0) * 55) + 5 * len(satisfied)),
         "match_reason": reason,
-        "verification_fallback": bool(candidate.get("fallback_only") or understanding.get("required_terms") and any(
-            term not in movie_terms for term in understanding["required_terms"]
-        )),
+        "verification_fallback": bool(
+            candidate.get("fallback_only")
+            or any(not item.startswith("strong evidence for ") for item in unverifiable)
+        ),
     }
 
 
-def rerank_candidates(raw_query, candidates, understanding=None):
+def rerank_candidates(raw_query, candidates, understanding=None, on_error=None):
     """Verify and rerank candidates using only available structured metadata."""
     if not candidates:
         return candidates
-    understanding = understanding or local_understanding(raw_query)
+    try:
+        understanding = understanding or local_understanding(raw_query)
+    except Exception as error:
+        if on_error:
+            on_error("verify", error)
+        understanding = {}
     cache_key = (
         "verify",
         raw_query.casefold(),
@@ -900,17 +1508,37 @@ def rerank_candidates(raw_query, candidates, understanding=None):
         return cached
     verified = []
     for original in candidates[:MAX_CANDIDATES]:
-        item = copy.deepcopy(original)
-        item.update(_basic_assessment(raw_query, item, understanding))
-        item["final_score"] = item["confidence"] * 0.8 + item["search_score"] * 0.2
+        try:
+            item = copy.deepcopy(original)
+            item.update(_basic_assessment(raw_query, item, understanding))
+        except Exception as error:
+            if on_error:
+                on_error("verify", error)
+            item = copy.deepcopy(original)
+            item.update({
+                "match_level": "partial",
+                "match_tier": "close",
+                "match_eligible": False,
+                "estimated_percent": 0,
+                "evidence_strength": 0.0,
+                "satisfied": [],
+                "unsatisfied": [],
+                "unverifiable": ["catalog evidence could not be verified"],
+                "confidence": 0,
+                "match_reason": "Shown as a closest alternative because evidence could not be verified.",
+                "verification_fallback": True,
+            })
+        item["final_score"] = item["estimated_percent"]
         verified.append(item)
     verified.sort(key=lambda item: (
-        item.get("match_level") == "full",
-        len(item.get("satisfied", [])),
-        item.get("confidence", 0),
-        item["movie"].get("average_rating") or 0,
-        item["movie"].get("vote_count", 0),
-    ), reverse=True)
+        item.get("match_level") != "full",
+        -item.get("evidence_strength", 0),
+        -item.get("confidence", 0),
+        -(item["movie"].get("average_rating") or 0),
+        -(item["movie"].get("vote_count") or 0),
+        str(item["movie"].get("title", "")).casefold(),
+        str(item["movie"].get("id", "")),
+    ))
     _cache_set(cache_key, verified)
     return verified
 

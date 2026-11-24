@@ -107,7 +107,7 @@ def violates(movie, constraints):
 def score(queries, results_by_query, by_id):
     """Results may be ids or (id, unverified) pairs; report both certainty levels."""
     recalls = {k: 0 for k in RECALL_KS}
-    violating = returned = empty = 0
+    violating = keyword_misses = returned = empty = 0
     by_kind = {}
     verified_returned = verified_violating = unverified_returned = unverified_violating = 0
     for item in queries:
@@ -121,13 +121,16 @@ def score(queries, results_by_query, by_id):
             movie_id, is_unverified = result if isinstance(result, tuple) else (result, False)
             returned += 1
             kinds = violated_kinds(by_id[movie_id], item["constraints"])
-            violating += bool(kinds)
+            hard_violation = any(kind != "keyword" for kind in kinds)
+            keyword_miss = "keyword" in kinds
+            violating += hard_violation
+            keyword_misses += keyword_miss
             if is_unverified:
                 unverified_returned += 1
-                unverified_violating += bool(kinds)
+                unverified_violating += hard_violation
             else:
                 verified_returned += 1
-                verified_violating += bool(kinds)
+                verified_violating += hard_violation
             for kind in kinds:
                 by_kind[kind] = by_kind.get(kind, 0) + 1
     total = len(queries) or 1
@@ -135,6 +138,7 @@ def score(queries, results_by_query, by_id):
         "queries": len(queries),
         **{f"recall@{k}": recalls[k] / total for k in RECALL_KS},
         "hard_constraint_violation_rate": violating / returned if returned else 0.0,
+        "keyword_miss_rate": keyword_misses / returned if returned else 0.0,
         "verified_hard_constraint_violation_rate": verified_violating / verified_returned if verified_returned else 0.0,
         "unverified_result_rate": unverified_returned / returned if returned else 0.0,
         "unverified_hard_constraint_violation_rate": unverified_violating / unverified_returned if unverified_returned else 0.0,
@@ -152,10 +156,13 @@ class _ResultCards(HTMLParser):
         self.title_buffer = []
 
     def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
         classes = dict(attrs).get("class", "").split()
         if tag == "article" and "movie-card" in classes:
-            self.card = {"title": "", "unverified": False}
+            self.card = {"id": None, "title": "", "unverified": False}
             self.cards.append(self.card)
+        elif self.card is not None and tag == "input" and attributes.get("name") == "movie_id":
+            self.card["id"] = attributes.get("value")
         elif self.card is not None and tag == "span" and "match-badge--unverified" in classes:
             self.card["unverified"] = True
         elif self.card is not None and tag == "h3" and "movie-card__title" in classes:
@@ -179,9 +186,7 @@ def run_search(queries, movies):
     from tests.test_search_golden import title_indexes
 
     exact_index, token_index = title_indexes(movies)
-    by_title = {}
-    for movie in movies:
-        by_title.setdefault(movie["title"], []).append(movie["id"])
+    ids_by_key = {str(movie["id"]): movie["id"] for movie in movies}
     client = app_module.app.test_client()
     out = {}
     with (
@@ -194,9 +199,7 @@ def run_search(queries, movies):
             parser.feed(html.decode("utf-8"))
             ids = []
             for result in parser.cards:
-                candidates = by_title.get(result["title"], [])
-                # Duplicate titles: credit the source record if that title is returned.
-                movie_id = item["source_id"] if item["source_id"] in candidates else (candidates[0] if candidates else None)
+                movie_id = ids_by_key.get(str(result["id"]))
                 if movie_id is not None:
                     ids.append((movie_id, result["unverified"]))
             out[item["query"]] = ids
