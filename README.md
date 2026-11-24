@@ -228,8 +228,9 @@ title, then catalog ID for stable ordering.
 Search input is capped at 500 characters and page/filter parameters are bounded.
 Each pipeline stage has a simpler fallback; filtering and result self-checks
 fail closed so an error cannot bypass exclusions, runtime, year, genre, country,
-recognition, or cast constraints. Search has a cooperative three-second stage
-budget. A slow stage is replaced with a partial, lower-confidence result path;
+recognition, or cast constraints. Search has a cooperative eight-second
+per-request budget. A slow stage is replaced with a partial, lower-confidence
+result path;
 the budget cannot interrupt a single synchronous operation mid-call.
 
 Each request appends one structured JSON record to
