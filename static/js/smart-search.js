@@ -130,6 +130,9 @@
     const cards = [...list.querySelectorAll(".movie-card")];
     const number = (card, key) => Number(card.dataset[`sort${key}`]) || 0;
     cards.sort((left, right) => {
+      const leftTier = Number(left.dataset.genreMatchCount) || 0;
+      const rightTier = Number(right.dataset.genreMatchCount) || 0;
+      if (leftTier !== rightTier) return rightTier - leftTier;
       if (resultSort === "popular") return number(right, "Votes") - number(left, "Votes") || number(right, "Rating") - number(left, "Rating");
       if (resultSort === "rating") return number(right, "Rating") - number(left, "Rating") || number(right, "Votes") - number(left, "Votes");
       if (resultSort === "newest") return number(right, "Year") - number(left, "Year") || number(right, "Rating") - number(left, "Rating");
@@ -524,6 +527,7 @@
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
+    closeSuggestions();
     if (!searchInput.value.trim()) {
       const params = new URLSearchParams(new FormData(form, event.submitter));
       rememberSearch(params);
@@ -579,6 +583,7 @@
 
         window.history.pushState({}, "", url);
         status.textContent = nextResults.querySelector(".results__count")?.textContent || "";
+        closeSuggestions();
       } catch (error) {
         if (version !== requestVersion) return;
         if (error.name === "AbortError") {
@@ -657,6 +662,9 @@
   });
   searchInput.addEventListener("scroll", updateSearchHighlight);
   searchInput.addEventListener("focus", showRecentSearches);
+  searchInput.addEventListener("blur", () => {
+    window.setTimeout(closeSuggestions, 100);
+  });
 
   form.querySelectorAll(".filter-row select[name]").forEach((filter) => {
     filter.addEventListener("change", () => form.requestSubmit(button));

@@ -58,6 +58,12 @@ from nlp.smart_search import (
 from nlp.concepts import normalize_phrase
 from nlp.cast_verification import classify_cast_gender, evaluate_cast_constraint
 from nlp.search_diagnostics import SearchTrace, write_search_record
+from nlp.catalog_matching import (
+    SERIES_MEMBER_MATCH_PERCENT,
+    derive_series_groups,
+    normalize_title,
+    title_aliases,
+)
 
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
@@ -82,21 +88,35 @@ TITLE_EXACT_INDEX = {}
 TITLE_TOKEN_INDEX = {}
 
 
+def _canonical_genre(value):
+    normalized = normalize_title(value)
+    aliases = {
+        "science fiction": "sci-fi",
+        "sci fi": "sci-fi",
+        "science fi": "sci-fi",
+        "biopic": "biography",
+        "romcom": "comedy",
+        "animated": "animation",
+    }
+    return aliases.get(normalized, normalized)
+
+
 def _title_key(value, fold_accents=True):
-    normalized = normalize_text(value)
-    if fold_accents:
-        normalized = unicodedata.normalize("NFKD", normalized)
-        normalized = "".join(char for char in normalized if not unicodedata.combining(char))
-    return re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE).strip()
+    return normalize_title(value)
 
 
 for movie in MOVIES:
     normalized_title = _title_key(movie["title"])
     TITLE_EXACT_INDEX.setdefault(_title_key(movie["title"], fold_accents=False), []).append(movie)
     TITLE_INDEX.setdefault(normalized_title, []).append(movie)
+    for alias in title_aliases(movie):
+        TITLE_INDEX.setdefault(alias, []).append(movie)
+        TITLE_EXACT_INDEX.setdefault(alias, []).append(movie)
     for token in set(normalized_title.split()):
         if len(token) >= 4:
             TITLE_TOKEN_INDEX.setdefault(token, []).append(movie)
+
+SERIES_GROUPS = derive_series_groups(MOVIES)
 
 EXAMPLE_QUERIES = [
     "I want something suspenseful but not horror, preferably a mystery under two hours.",
@@ -522,6 +542,130 @@ GENERIC_TITLE_TOKENS = {
 def find_title_matches(query, movies):
     """Find titles written exactly or as a phrase inside a natural-language query."""
     normalized_query = _title_key(query)
+    query_year = re.search(r"\b((?:18|19|20)\d{2})\b", str(query))
+    query_year = int(query_year.group(1)) if query_year else None
+
+    groups = derive_series_groups(movies)
+    for group in groups:
+        members = [
+            movie for movie in movies
+            if movie.get("title") in group["titles"]
+        ]
+        matching_members = [
+            movie for movie in members
+            if normalized_query in title_aliases(movie)
+        ]
+        if matching_members:
+            named = matching_members[0]
+            if query_year:
+                named = next((movie for movie in matching_members if movie.get("release_year") == query_year), named)
+            ordered = [named] + sorted(
+                (movie for movie in members if movie is not named),
+                key=lambda movie: (
+                    movie.get("release_year") or 0,
+                    -(movie.get("vote_count") or 0),
+                    str(movie.get("title", "")).casefold(),
+                ),
+            )
+            return ordered
+
+    for group in groups:
+        members = [movie for movie in movies if movie.get("title") in group["titles"]]
+        base_names = {
+            normalize_title(group["base"]),
+            *(normalize_title(movie.get("title", "")) for movie in members),
+        }
+        if normalized_query in base_names:
+            exact_member = next((
+                movie for movie in members
+                if normalize_title(movie.get("title", "")) == normalized_query
+            ), None)
+            ordered = ([exact_member] if exact_member else []) + sorted(
+                (movie for movie in members if movie is not exact_member),
+                key=lambda movie: (
+                    movie.get("release_year") or 0,
+                    -(movie.get("vote_count") or 0),
+                    str(movie.get("title", "")).casefold(),
+                ),
+            )
+            return ordered
+
+    exact_matches = []
+    for movie in movies:
+        if normalized_query in title_aliases(movie):
+            exact_matches.append(movie)
+    if exact_matches:
+        if query_year:
+            exact_matches.sort(key=lambda movie: (
+                movie.get("release_year") != query_year,
+                -(movie.get("vote_count") or 0),
+                str(movie.get("title", "")).casefold(),
+                str(movie.get("id", "")),
+            ))
+        else:
+            exact_matches.sort(key=lambda movie: (
+                -(movie.get("vote_count") or 0),
+                str(movie.get("title", "")).casefold(),
+                str(movie.get("id", "")),
+            ))
+        return list({str(movie["id"]): movie for movie in exact_matches}.values())
+
+    groups = derive_series_groups(movies)
+    for group in groups:
+        base_candidates = {
+            normalize_title(title)
+            for title in group["titles"]
+        }
+        if normalized_query not in base_candidates:
+            continue
+        member_titles = group["titles"]
+        members = [
+            movie for movie in movies
+            if movie.get("title") in member_titles
+        ]
+        if exact_matches:
+            return exact_matches
+        named_entry = next((
+            movie for movie in members
+            if normalize_title(movie.get("title", "")) == normalized_query
+        ), None)
+        if named_entry:
+            return [named_entry] + sorted(
+                (movie for movie in members if movie is not named_entry),
+                key=lambda movie: (
+                    movie.get("release_year") or 0,
+                    -(movie.get("vote_count") or 0),
+                    str(movie.get("title", "")).casefold(),
+                ),
+            )
+        base_query = normalized_query
+        base_members = sorted(
+            members,
+            key=lambda movie: (
+                normalize_title(movie.get("title", "")) != base_query,
+                movie.get("release_year") or 0,
+                -(movie.get("vote_count") or 0),
+                str(movie.get("title", "")).casefold(),
+            ),
+        )
+        return base_members
+
+    title_prefix = normalized_query.strip()
+    if len(title_prefix.split()) >= 2:
+        prefix_matches = [
+            movie for movie in movies
+            if normalize_title(movie["title"]).startswith(title_prefix)
+        ]
+        if prefix_matches:
+            return sorted(
+                prefix_matches,
+                key=lambda movie: (
+                    -(movie.get("vote_count") or 0),
+                    str(movie.get("title", "")).casefold(),
+                    str(movie.get("id", "")),
+                ),
+            )
+
     exact_query = _title_key(query, fold_accents=False).strip()
     exact_matches = TITLE_EXACT_INDEX.get(exact_query, [])
     if not exact_matches:
@@ -671,21 +815,23 @@ def remove_title_text(query, title_matches):
 def is_exact_title_query(query, title_matches):
     """True when the entire query is one movie title, ignoring case and punctuation."""
     normalized_query = _title_key(query)
+    normalized_without_article = re.sub(r"^(?:the|a|an)\s+", "", normalized_query)
+    return any(
+        normalized_query in title_aliases(movie)
+        or normalized_without_article in title_aliases(movie)
+        for movie in title_matches
+    )
 
 
 def _contains_complete_title(query, title):
     normalized_query = _title_key(query)
-    normalized_title = _title_key(title)
+    normalized_title = normalize_title(title)
+    if normalized_query == normalized_title:
+        return True
     return bool(re.search(
         rf"(?<![a-z0-9]){re.escape(normalized_title)}(?![a-z0-9])",
         normalized_query,
     ))
-    normalized_without_article = re.sub(r"^(?:the|a|an)\s+", "", normalized_query)
-    return any(
-        normalized_query == _title_key(movie["title"])
-        or normalized_without_article == _title_key(movie["title"])
-        for movie in title_matches
-    )
 
 
 def has_unsupported_negated_requirement(query):
@@ -1027,7 +1173,7 @@ def index():
         return "Search limit reached. Please wait a minute and try again.", 429
     debug_enabled = request.args.get("debug", "")[:16].strip().lower() in {"1", "true", "yes"}
     selected_genres = list(dict.fromkeys(
-        value[:64].strip().lower()
+        _canonical_genre(value[:64].strip().lower())
         for value in request.args.getlist("genre")[:12] if value[:64].strip()
     ))
     removed_genres = {
@@ -1169,7 +1315,7 @@ def index():
         page_number = max(1, int(request.args.get("page", "1")[:16]))
     except ValueError:
         page_number = 1
-    genres = sorted({genre for movie in MOVIES for genre in movie.get("genres", [])})
+    genres = sorted({_canonical_genre(genre) for movie in MOVIES for genre in movie.get("genres", [])})
     nationalities = sorted({
         code for movie in MOVIES for code in movie_country_codes(movie) if code
     })
@@ -1219,14 +1365,13 @@ def index():
     def search_pool():
         pool = []
         for movie in base_movies:
-            if query_genres:
-                genre_match = (
-                    any(genre in movie["genres"] for genre in query_genres)
-                    if re.search(r"\bor\b", preference_query, re.IGNORECASE)
-                    else all(genre in movie["genres"] for genre in query_genres)
-                )
-                if not genre_match:
-                    continue
+            active_genres = list(dict.fromkeys([*selected_genres, *query_genres]))
+            active_genres = [
+                genre for genre in active_genres
+                if genre not in (query_preferences.get("excluded_genres", []) if query_preferences else [])
+            ]
+            if active_genres and not any(genre in movie["genres"] for genre in active_genres):
+                continue
             if not movie_matches_runtime_limits(movie, query_preferences):
                 continue
             if query_preferences and is_excluded(movie, query_preferences):
@@ -1553,6 +1698,12 @@ def index():
         all_results = ranking["results"]
         if trace is not None:
             trace.count("scored", len(all_results))
+        title_match_ids = {str(movie["id"]) for movie in title_matches} if title_matches else set()
+        title_query_is_exact = bool(title_matches and is_exact_title_query(query, title_matches))
+        if title_match_ids and title_query_is_exact:
+            for entry in all_results:
+                if str(entry["movie"]["id"]) in title_match_ids:
+                    entry["percent"] = SERIES_MEMBER_MATCH_PERCENT
         for entry in all_results:
             candidate = candidate_by_id.get(str(entry["movie"]["id"]))
             if candidate is None:
@@ -1584,6 +1735,17 @@ def index():
             entry["match_tier"] = candidate["match_tier"]
             entry["evidence_strength"] = candidate.get("evidence_strength", 0.0)
             entry["final_score"] = entry["percent"]
+        if title_match_ids and title_query_is_exact:
+            for entry in all_results:
+                if str(entry["movie"]["id"]) in title_match_ids:
+                    entry["percent"] = 100
+                    entry["match_level"] = "full"
+                    entry["match_tier"] = "exact"
+                    entry["match_reason"] = (
+                        f"Same series as {query.strip()}."
+                        if len(title_matches) > 1
+                        else f"Matched title: {entry['movie']['title']}."
+                    )
         safe_results = []
         eligible_ids = {str(movie.get("id")) for movie in filtered_movies}
         for entry in all_results:
@@ -1610,7 +1772,7 @@ def index():
                 or candidate.get("unsatisfied")
                 or candidate.get("unverifiable")
                 or candidate.get("fallback_only")
-            ):
+            ) and str(movie["id"]) not in title_match_ids:
                 entry["match_level"] = "partial"
                 entry["match_tier"] = "close"
                 if trace is not None:
@@ -1632,7 +1794,14 @@ def index():
                 if str(entry["movie"]["id"]) in title_match_ids
             ]
         exact_results = [entry for entry in all_results if entry["match_level"] == "full"]
-        if understanding.get("similar_to"):
+        if title_matches:
+            title_order = {str(movie["id"]): index for index, movie in enumerate(title_matches)}
+            all_results.sort(key=lambda entry: (
+                title_order.get(str(entry["movie"]["id"]), len(title_order)),
+                -(entry["movie"].get("vote_count") or 0),
+                str(entry["movie"].get("title", "")).casefold(),
+            ))
+        elif understanding.get("similar_to"):
             if exact_results:
                 all_results = exact_results
             all_results.sort(key=lambda entry: (
@@ -1643,6 +1812,7 @@ def index():
             context["result_count_label"] = f"{len(all_results)} closest matches"
         elif exact_results:
             all_results.sort(key=lambda entry: (
+                -len(set(selected_genres).intersection(set(entry["movie"].get("genres", [])))),
                 -entry["percent"],
                 -entry.get("evidence_strength", 0.0),
                 -(entry["movie"].get("average_rating") or 0),
@@ -1652,6 +1822,7 @@ def index():
             ))
         else:
             all_results.sort(key=lambda entry: (
+                -len(set(selected_genres).intersection(set(entry["movie"].get("genres", [])))),
                 -entry["percent"],
                 -entry.get("evidence_strength", 0.0),
                 -(entry["movie"].get("average_rating") or 0),
@@ -1664,6 +1835,17 @@ def index():
             f'{context["result_tier_counts"][tier]} {tier}'
             for tier in ("exact", "close", "related")
         )
+        if selected_genres:
+            all_count = sum(
+                1 for entry in all_results
+                if set(selected_genres).issubset(set(entry["movie"].get("genres", [])))
+            )
+            partial_count = len(all_results) - all_count
+            if all_count:
+                genre_count_label = f"{all_count} match all selected genres, {partial_count} match some"
+            else:
+                genre_count_label = f"0 match all selected genres, {partial_count} match some"
+            context["result_count_label"] += " — " + genre_count_label
         if exact_results and query_analysis["ranking_intent"] and not understanding.get("similar_to"):
             all_results.sort(key=lambda entry: (
                 ranking_key(entry, query_analysis["ranking_intent"]), entry["final_score"]
@@ -1721,6 +1903,16 @@ def index():
                 [{"ok": False, "text": entry.get("match_reason", "Closest available catalog result.")}],
                 trace,
             )
+            if selected_genres:
+                missing = [
+                    genre for genre in selected_genres
+                    if genre not in movie.get("genres", [])
+                ]
+                if missing:
+                    reasons = list(reasons) + [{
+                        "ok": False,
+                        "text": "Missing: " + ", ".join(title_case(genre) for genre in missing),
+                    }]
             if entry.get("verification_fallback") and not reasons:
                 reasons = [{"ok": False, "text": entry["match_reason"]}]
             display_results.append({
@@ -1739,7 +1931,11 @@ def index():
                     "close": "Closest match",
                     "related": "Related match",
                 }[entry["match_tier"]],
-                "show_unverified_badge": bool(entry["unverifiable"] or entry["verification_fallback"]),
+                "genre_match_count": len(set(selected_genres).intersection(set(movie.get("genres", [])))) ,
+                "show_unverified_badge": (
+                    False if str(movie["id"]) in title_match_ids and entry["match_tier"] == "exact"
+                    else bool(entry["unverifiable"] or entry["verification_fallback"])
+                ),
                 "cast_status": cast_status,
                 "cast_badge": cast_status["badge"],
                 "cast_evidence": cast_status["evidence"],
@@ -1888,7 +2084,16 @@ def index():
         total_pages = max(1, math.ceil(len(filtered_movies) / per_page))
         page_number = min(page_number, total_pages)
         start = (page_number - 1) * per_page
-        browse_source = heapq.nlargest(start + per_page, filtered_movies, key=movie_rank_key)
+        browse_source = sorted(
+            filtered_movies,
+            key=lambda movie: (
+                -len(set(selected_genres).intersection(set(movie.get("genres", [])))) ,
+                -(movie.get("average_rating") or 0),
+                -(movie.get("vote_count") or 0),
+                str(movie.get("title", "")).casefold(),
+                str(movie.get("id", "")),
+            ),
+        )
         context.update({
             "movies": [
                 {"movie": movie, "poster_exists": poster_exists(movie)}
@@ -1897,6 +2102,16 @@ def index():
             "page_number": page_number,
             "total_pages": total_pages,
         })
+        if selected_genres:
+            all_count = sum(
+                1 for movie in browse_source
+                if set(selected_genres).issubset(set(movie.get("genres", [])))
+            )
+            partial_count = len(browse_source) - all_count
+            context["result_count"] = len(browse_source)
+            context["result_count_label"] = (
+                f"{all_count} match all selected genres, {partial_count} match some"
+            )
 
     if trace is not None:
         trace.stage = "render"
@@ -1940,28 +2155,41 @@ def suggestion_index():
 
 @app.route("/suggest", methods=["GET"])
 def suggest():
-    typed = normalize_text(request.args.get("q", "")[:100]).replace(",", " ").strip()
+    typed = normalize_title(request.args.get("q", "")[:100])
     if len(typed) < 2:
         return jsonify([])
     index = suggestion_index()
 
     def rank(text):
-        if text.startswith(typed):
+        text = normalize_title(text)
+        if text == typed:
             return 0
-        if any(word.startswith(typed) for word in text.split()) or f" {typed}" in text:
-            return 1
+        if text.startswith(typed):
+            return 2
+        if typed in text:
+            return 3
+        if any(word.startswith(typed) for word in text.split()):
+            return 2
         return None
 
     suggestions = []
+    series_titles = set()
+    for group in derive_series_groups(MOVIES):
+        for title in group["titles"]:
+            series_titles.add(title)
     for phrase, kind in index["phrases"]:
-        if rank(phrase) is not None:
-            suggestions.append((rank(phrase), 0, phrase, kind))
+        level = rank(phrase)
+        if level is not None:
+            suggestions.append((level, 0, phrase, kind))
     seen = set()
     for position, (normalized_title, title) in enumerate(index["titles"]):
         level = rank(normalized_title)
         if level is not None and title not in seen:
             seen.add(title)
-            suggestions.append((level, position + 1, title, "title"))
+            is_series = title in series_titles
+            kind = "series" if is_series else "title"
+            series_level = 1 if is_series and (normalized_title.startswith(typed) or typed in normalized_title) else level
+            suggestions.append((series_level, position + 1, title, kind))
     suggestions.sort(key=lambda item: (item[0], item[1]))
     return jsonify([{"text": text, "kind": kind} for _, _, text, kind in suggestions[:8]])
 

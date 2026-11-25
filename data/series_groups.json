@@ -1,0 +1,287 @@
+[
+  {
+    "base": "ant man and the wasp",
+    "rule": "sequel-marker",
+    "titles": [
+      "Ant-Man and the Wasp",
+      "Ant-Man and the Wasp: Quantumania"
+    ]
+  },
+  {
+    "base": "beauty and the beast",
+    "rule": "sequel-marker",
+    "titles": [
+      "Beauty and the Beast",
+      "Beauty and the Beast"
+    ]
+  },
+  {
+    "base": "captain america the first avenger",
+    "rule": "two-word-prefix",
+    "titles": [
+      "Captain America: The First Avenger",
+      "Captain America: The Winter Soldier"
+    ]
+  },
+  {
+    "base": "dawn of the dead",
+    "rule": "two-word-prefix",
+    "titles": [
+      "Dawn of the Dead",
+      "Dawn of the Planet of the Apes"
+    ]
+  },
+  {
+    "base": "fast and furious",
+    "rule": "sequel-marker",
+    "titles": [
+      "Fast & Furious",
+      "Fast & Furious 6",
+      "Fast & Furious Presents: Hobbs & Shaw"
+    ]
+  },
+  {
+    "base": "fast 5",
+    "rule": "sequel-marker",
+    "titles": [
+      "Fast Five",
+      "The Fast and the Furious",
+      "The Fast and the Furious: Tokyo Drift"
+    ]
+  },
+  {
+    "base": "guardians of the galaxy",
+    "rule": "sequel-marker",
+    "titles": [
+      "Guardians of the Galaxy",
+      "Guardians of the Galaxy Vol. 3",
+      "Guardians of the Galaxy: Vol. 2"
+    ]
+  },
+  {
+    "base": "harry potter and the goblet of fire",
+    "rule": "sequel-marker",
+    "titles": [
+      "Harry Potter and the Chamber of Secrets",
+      "Harry Potter and the Deathly Hallows: Part 1",
+      "Harry Potter and the Deathly Hallows: Part 2",
+      "Harry Potter and the Goblet of Fire",
+      "Harry Potter and the Half-Blood Prince",
+      "Harry Potter and the Order of the Phoenix",
+      "Harry Potter and the Prisoner of Azkaban",
+      "Harry Potter and the Sorcerer's Stone"
+    ]
+  },
+  {
+    "base": "how to train your dragon",
+    "rule": "sequel-marker",
+    "titles": [
+      "How to Train Your Dragon",
+      "How to Train Your Dragon 2"
+    ]
+  },
+  {
+    "base": "indiana jones and the dial of destiny",
+    "rule": "sequel-marker",
+    "titles": [
+      "Indiana Jones and the Dial of Destiny",
+      "Indiana Jones and the Kingdom of the Crystal Skull"
+    ]
+  },
+  {
+    "base": "iron man 3",
+    "rule": "sequel-marker",
+    "titles": [
+      "Iron Man 2",
+      "Iron Man 3"
+    ]
+  },
+  {
+    "base": "john wick 4",
+    "rule": "sequel-marker",
+    "titles": [
+      "John Wick: Chapter 2",
+      "John Wick: Chapter 4"
+    ]
+  },
+  {
+    "base": "kill bill vol 2",
+    "rule": "sequel-marker",
+    "titles": [
+      "Kill Bill: Vol. 1",
+      "Kill Bill: Vol. 2"
+    ]
+  },
+  {
+    "base": "kung fu panda",
+    "rule": "sequel-marker",
+    "titles": [
+      "Kung Fu Panda",
+      "Kung Fu Panda 2"
+    ]
+  },
+  {
+    "base": "men in black",
+    "rule": "sequel-marker",
+    "titles": [
+      "Men in Black",
+      "Men in Black 3",
+      "Men in Black II"
+    ]
+  },
+  {
+    "base": "mission impossible 3",
+    "rule": "sequel-marker",
+    "titles": [
+      "Mission: Impossible II",
+      "Mission: Impossible III"
+    ]
+  },
+  {
+    "base": "night at the museum",
+    "rule": "two-word-prefix",
+    "titles": [
+      "Night at the Museum",
+      "Night at the Museum: Battle of the Smithsonian"
+    ]
+  },
+  {
+    "base": "now you see me",
+    "rule": "sequel-marker",
+    "titles": [
+      "Now You See Me",
+      "Now You See Me 2"
+    ]
+  },
+  {
+    "base": "oceans 8",
+    "rule": "sequel-marker",
+    "titles": [
+      "Ocean's Eight",
+      "Ocean's Eleven",
+      "Ocean's Thirteen",
+      "Ocean's Twelve"
+    ]
+  },
+  {
+    "base": "pirates of the caribbean at worlds end",
+    "rule": "two-word-prefix",
+    "titles": [
+      "Pirates of the Caribbean: At World's End",
+      "Pirates of the Caribbean: Dead Man's Chest",
+      "Pirates of the Caribbean: Dead Men Tell No Tales",
+      "Pirates of the Caribbean: On Stranger Tides",
+      "Pirates of the Caribbean: The Curse of the Black Pearl"
+    ]
+  },
+  {
+    "base": "pride and prejudice",
+    "rule": "two-word-prefix",
+    "titles": [
+      "Pride & Prejudice",
+      "Pride and Prejudice"
+    ]
+  },
+  {
+    "base": "saw 3",
+    "rule": "sequel-marker",
+    "titles": [
+      "Saw II",
+      "Saw III"
+    ]
+  },
+  {
+    "base": "spider man 2",
+    "rule": "sequel-marker",
+    "titles": [
+      "Spider-Man 2",
+      "Spider-Man 3"
+    ]
+  },
+  {
+    "base": "star wars episode 8 the last jedi",
+    "rule": "two-word-prefix",
+    "titles": [
+      "Star Wars: Episode I - The Phantom Menace",
+      "Star Wars: Episode II - Attack of the Clones",
+      "Star Wars: Episode III - Revenge of the Sith",
+      "Star Wars: Episode IX - The Rise of Skywalker",
+      "Star Wars: Episode VII - The Force Awakens",
+      "Star Wars: Episode VIII - The Last Jedi"
+    ]
+  },
+  {
+    "base": "amazing spider man",
+    "rule": "sequel-marker",
+    "titles": [
+      "The Amazing Spider-Man",
+      "The Amazing Spider-Man 2"
+    ]
+  },
+  {
+    "base": "chronicles of narnia prince caspian",
+    "rule": "sequel-marker",
+    "titles": [
+      "The Chronicles of Narnia: Prince Caspian",
+      "The Chronicles of Narnia: The Lion, the Witch and the Wardrobe"
+    ]
+  },
+  {
+    "base": "girl with the dragon tattoo",
+    "rule": "two-word-prefix",
+    "titles": [
+      "The Girl with the Dragon Tattoo",
+      "The Girl with the Dragon Tattoo"
+    ]
+  },
+  {
+    "base": "hangover 3",
+    "rule": "sequel-marker",
+    "titles": [
+      "The Hangover Part II",
+      "The Hangover Part III"
+    ]
+  },
+  {
+    "base": "hunger games mockingjay 2",
+    "rule": "sequel-marker",
+    "titles": [
+      "The Hunger Games: Mockingjay - Part 1",
+      "The Hunger Games: Mockingjay - Part 2"
+    ]
+  },
+  {
+    "base": "lord of the rings the 2 towers",
+    "rule": "two-word-prefix",
+    "titles": [
+      "The Lord of the Rings: The Fellowship of the Ring",
+      "The Lord of the Rings: The Return of the King",
+      "The Lord of the Rings: The Two Towers"
+    ]
+  },
+  {
+    "base": "secret life of pets",
+    "rule": "two-word-prefix",
+    "titles": [
+      "The Secret Life of Pets",
+      "The Secret Life of Walter Mitty"
+    ]
+  },
+  {
+    "base": "twilight saga breaking dawn 2",
+    "rule": "sequel-marker",
+    "titles": [
+      "The Twilight Saga: Breaking Dawn - Part 1",
+      "The Twilight Saga: Breaking Dawn - Part 2"
+    ]
+  },
+  {
+    "base": "toy story 3",
+    "rule": "sequel-marker",
+    "titles": [
+      "Toy Story 2",
+      "Toy Story 3",
+      "Toy Story 4"
+    ]
+  }
+]
