@@ -59,6 +59,24 @@ class SearchRouteTests(unittest.TestCase):
         ]
         self.assertEqual(failures, [])
 
+    def test_fuzzy_correction_offers_exact_search(self):
+        response = self.client.get("/", query_string={"q": "mystrey"})
+        html = unescape(response.get_data(as_text=True))
+        self.assertIn(
+            'Showing results for "mystery" (you typed "mystrey").',
+            html,
+        )
+        self.assertIn('href="/?q=mystrey&exact=1', html)
+        self.assertIn("Search exactly what you typed", html)
+
+        exact_response = self.client.get(
+            "/", query_string={"q": "mystrey", "exact": "1"},
+        )
+        self.assertNotIn(
+            b"Showing results for",
+            exact_response.data,
+        )
+
     def test_explicit_genre_filter_overrides_title_query(self):
         response = self.client.get(
             "/?q=recommend+the+grand+budapest+hotel&genre=action&nationality=CA&per_page=12"
@@ -237,6 +255,76 @@ class SearchRouteTests(unittest.TestCase):
         self.assertNotIn(b'data-detail-title=', year_response.data)
         self.assertIn(b"No close matches found", runtime_response.data)
         self.assertIn(b"No close matches found", year_response.data)
+
+    def test_unknown_runtime_is_badged_counted_and_ranked_after_verified_movies(self):
+        movies = [
+            {
+                "id": "runtime-known", "title": "Verified Runtime",
+                "synopsis": "A verified drama.", "genres": ["drama"],
+                "runtime": 90, "release_year": 2020, "themes": [],
+                "mood_tags": [], "keywords": [], "content_descriptors": [],
+                "notable_awards": [], "origin_regions": [],
+                "average_rating": 7.0, "vote_count": 100,
+            },
+            {
+                "id": "runtime-unknown", "title": "Unknown Runtime",
+                "synopsis": "A second drama.", "genres": ["drama"],
+                "runtime": None, "release_year": 2020, "themes": [],
+                "mood_tags": [], "keywords": [], "content_descriptors": [],
+                "notable_awards": [], "origin_regions": [],
+                "average_rating": 7.0, "vote_count": 100,
+            },
+        ]
+
+        def retrieve(_query, _understanding, candidates, *_args):
+            return [{
+                "movie": movie,
+                "search_score": 1.0,
+                "match_reason": "Synthetic runtime test.",
+                "relevance_score": 1.0,
+                "query_evidence": {
+                    "details": [{
+                        "phrase": "runtime", "source": "synthetic",
+                        "strength": 1.0, "strong": True,
+                    }],
+                    "associated_count": 0, "score": 1.0, "strength": 1.0,
+                },
+                "normalized_terms": [],
+                "evidence_strength": 1.0,
+                "fallback_only": False,
+            } for movie in candidates]
+
+        def rerank(_query, candidates, _understanding, on_error=None):
+            for candidate in candidates:
+                candidate.update({
+                    "match_eligible": True,
+                    "match_level": "full",
+                    "match_tier": "exact",
+                    "satisfied": [],
+                    "unsatisfied": [],
+                    "unverifiable": [],
+                    "confidence": 1.0,
+                    "verification_fallback": False,
+                })
+            return candidates
+
+        with (
+            patch("app.MOVIES", movies),
+            patch("app.retrieve_candidates", side_effect=retrieve),
+            patch("app.rerank_candidates", side_effect=rerank),
+            patch("app.build_match_reasons", return_value=[{
+                "ok": True, "text": "Synthetic runtime evidence.",
+            }]),
+            patch("app.write_search_record"),
+        ):
+            response = self.client.get("/?q=under+100+minutes&per_page=10")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("1 unverified", html)
+        self.assertIn("Unverified", html)
+        self.assertIn("Runtime unavailable", html)
+        self.assertLess(html.index("Verified Runtime"), html.index("Unknown Runtime"))
 
     def test_overlong_query_is_capped_with_a_next_step(self):
         query = "space " * 2000

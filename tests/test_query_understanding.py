@@ -1,5 +1,6 @@
 """Focused regressions for title, negation, runtime, and query intent."""
 
+from html import unescape
 import sys
 import unittest
 from pathlib import Path
@@ -40,6 +41,25 @@ class QueryUnderstandingTests(unittest.TestCase):
         ]
         self.assertIn("The Lego Movie", titles)
 
+    def test_country_typos_use_safe_catalog_correction(self):
+        self.assertEqual(build_structured_query("movies from canad")["country"], "CA")
+        self.assertEqual(build_structured_query("movies from horror")["country"], "")
+
+    def test_ambiguous_interpretation_is_a_removable_chip(self):
+        client = flask_app.test_client()
+        response = client.get("/", query_string={"q": "light"})
+        html = unescape(response.get_data(as_text=True))
+        chip = "Interpreted</span> 'light' as mood"
+        self.assertIn(chip, html)
+
+        removed = client.get(
+            "/", query_string={"q": "light", "drop": "ambiguous:light:mood"},
+        )
+        self.assertNotIn(
+            chip,
+            unescape(removed.get_data(as_text=True)),
+        )
+
     def test_title_wins_but_embedded_genre_reading_is_removable(self):
         client = flask_app.test_client()
         exact = client.get("/", query_string={"q": "The Dark Knight"})
@@ -62,13 +82,26 @@ class QueryUnderstandingTests(unittest.TestCase):
         hedged = extract_preferences("not too violent")
         self.assertEqual(hedged["soft_exclusions"], ["content_descriptor:violence"])
         self.assertEqual(hedged["excluded_content_descriptors"], [])
-        for query in (
+        unqualified_queries = (
             "horror no thanks",
             "no horror please",
             "horror is not what i want",
             "I'd rather not horror",
             "anything but horror",
             "non-horror",
+        )
+        for query in unqualified_queries:
+            with self.subTest(query=query):
+                preferences = extract_preferences(query)
+                self.assertEqual(preferences["excluded_genres"], [])
+                self.assertTrue(preferences["ambiguous_interpretations"][0]["negated"])
+        for query in (
+            "horror movies no thanks",
+            "no horror movies please",
+            "horror movie is not what i want",
+            "I'd rather not horror movies",
+            "anything but horror movies",
+            "non-horror movies",
         ):
             with self.subTest(query=query):
                 self.assertIn("horror", extract_preferences(query)["excluded_genres"])

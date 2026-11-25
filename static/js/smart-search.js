@@ -172,7 +172,15 @@
       const card = document.createElement("article");
       card.className = "movie-card movie-card--skeleton";
       card.setAttribute("aria-hidden", "true");
-      card.innerHTML = '<div class="skeleton-block skeleton-poster"></div><div><div class="skeleton-block skeleton-line"></div><div class="skeleton-block skeleton-line"></div><div class="skeleton-block skeleton-line"></div></div>';
+      const poster = document.createElement("div");
+      poster.className = "skeleton-block skeleton-poster";
+      const details = document.createElement("div");
+      for (let line = 0; line < 3; line += 1) {
+        const skeletonLine = document.createElement("div");
+        skeletonLine.className = "skeleton-block skeleton-line";
+        details.append(skeletonLine);
+      }
+      card.append(poster, details);
       list.append(card);
     }
   }
@@ -226,18 +234,9 @@
   function closeSuggestions() {
     if (!suggestions) return;
     suggestions.hidden = true;
-    suggestions.innerHTML = "";
+    suggestions.replaceChildren();
     searchInput.setAttribute("aria-expanded", "false");
     activeSuggestionIndex = -1;
-  }
-
-  function escapeHtml(value) {
-    return String(value)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
   }
 
   function renderSuggestions(items) {
@@ -247,12 +246,21 @@
       return;
     }
     closeRecentSearches();
-    suggestions.innerHTML = items.map((item) => `
-      <button type="button" role="option" class="search-suggestion" data-suggestion="${escapeHtml(item.text)}">
-        <span>${escapeHtml(item.text)}</span>
-        <small>${escapeHtml(item.kind)}</small>
-      </button>
-    `).join("");
+    const fragment = document.createDocumentFragment();
+    items.forEach((item) => {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.setAttribute("role", "option");
+      option.className = "search-suggestion";
+      option.dataset.suggestion = item.text;
+      const label = document.createElement("span");
+      label.textContent = item.text;
+      const kind = document.createElement("small");
+      kind.textContent = item.kind;
+      option.append(label, kind);
+      fragment.append(option);
+    });
+    suggestions.replaceChildren(fragment);
     suggestions.hidden = false;
     searchInput.setAttribute("aria-expanded", "true");
     suggestions.querySelectorAll("[data-suggestion]").forEach((option) => {
@@ -311,14 +319,17 @@
       if (rule.start >= (nonOverlapping.at(-1)?.end || 0)) nonOverlapping.push(rule);
     });
     let cursor = 0;
-    let html = "";
+    const fragment = document.createDocumentFragment();
     nonOverlapping.forEach((rule) => {
-      html += escapeHtml(value.slice(cursor, rule.start));
-      html += `<span class="highlight-token highlight-token--${rule.type}">${escapeHtml(value.slice(rule.start, rule.end))}</span>`;
+      fragment.append(document.createTextNode(value.slice(cursor, rule.start)));
+      const token = document.createElement("span");
+      token.className = `highlight-token highlight-token--${rule.type}`;
+      token.textContent = value.slice(rule.start, rule.end);
+      fragment.append(token);
       cursor = rule.end;
     });
-    html += escapeHtml(value.slice(cursor));
-    highlightLayer.innerHTML = html;
+    fragment.append(document.createTextNode(value.slice(cursor)));
+    highlightLayer.replaceChildren(fragment);
     highlightLayer.style.setProperty("--search-input-height", `${searchInput.getBoundingClientRect().height}px`);
     highlightLayer.hidden = !value;
     searchInput.classList.toggle("has-highlight", Boolean(value));
@@ -696,7 +707,13 @@
     removeButton.dataset.removeGenre = value;
     removeButton.setAttribute("aria-label", `Remove ${labelText} genre`);
     removeButton.title = `Remove ${labelText}`;
-    removeButton.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-x"></use></svg>';
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.classList.add("icon");
+    icon.setAttribute("aria-hidden", "true");
+    const iconUse = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    iconUse.setAttribute("href", "#icon-x");
+    icon.append(iconUse);
+    removeButton.append(icon);
     removeButton.addEventListener("click", () => removeGenreChip(removeButton));
 
     chip.append(hiddenInput, label, removeButton);

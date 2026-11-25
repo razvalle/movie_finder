@@ -17,12 +17,6 @@
     return terms.sort((left, right) => right.term.length - left.term.length);
   }
 
-  function escapeHtml(value) {
-    return value.replace(/[&<>"']/g, (character) => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-    })[character]);
-  }
-
   function enhanceSearchHighlights() {
     if (!highlightLayer || highlightLayer.hidden) return;
     const terms = parserTerms();
@@ -63,13 +57,17 @@
     });
     if (!selected.length) return;
     let position = 0;
-    let html = "";
+    const fragment = document.createDocumentFragment();
     selected.forEach(({ start, end, type }) => {
-      html += escapeHtml(source.slice(position, start));
-      html += `<mark class="synopsis-match synopsis-match--${type}">${escapeHtml(source.slice(start, end))}</mark>`;
+      fragment.append(document.createTextNode(source.slice(position, start)));
+      const mark = document.createElement("mark");
+      mark.className = `synopsis-match synopsis-match--${type}`;
+      mark.textContent = source.slice(start, end);
+      fragment.append(mark);
       position = end;
     });
-    synopsis.innerHTML = html + escapeHtml(source.slice(position));
+    fragment.append(document.createTextNode(source.slice(position)));
+    synopsis.replaceChildren(fragment);
     synopsis.dataset.highlighted = "true";
   }
 

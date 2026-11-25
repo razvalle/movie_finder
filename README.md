@@ -41,7 +41,7 @@ Detected: Mood: Suspenseful · Genre: Mystery · Exclude: Horror · Runtime: <12
    ```
 5. Open the URL it prints (usually `http://127.0.0.1:5000`) in your browser.
 
-## Real IMDb catalog (2000-2026)
+## IMDb catalog
 
 The repository can use IMDb's public bulk datasets instead of synthetic
 fallback records. Download `title.basics.tsv.gz` and `title.ratings.tsv.gz`
@@ -76,26 +76,25 @@ Sources: IMDb public datasets (`title.basics`, `title.ratings`, optional
 optional Wikidata/Wikimedia and TMDB enrichment. IMDb data is used under IMDb's
 non-commercial dataset terms.
 
-`data/import_imdb.py` applies these rules, in order:
-1. Keep only rows with `titleType == "movie"`.
-2. Drop rows with no `startYear`, or a year outside 1990-2026.
-3. Drop rows with no genres; genres are lower-cased.
-4. Missing runtime (`\N`) is stored as `0`, meaning "unknown", not a real length.
-5. Ratings and vote counts are joined by `tconst`; unrated titles keep a null rating and 0 votes.
-6. Release regions come from `title.akas` and are release markets, not production origin.
-7. The `synopsis` is a generated metadata sentence, because IMDb supplies no plots.
-   `themes`, `mood_tags` and `content_descriptors` are empty (except `adult`).
-8. Records are sorted by year, title, then IMDb id, and ids are reassigned sequentially.
+The shared import and normalization rules are documented in
+[`data/CLEANING_RULES.md`](data/CLEANING_RULES.md). In brief, the importer logs
+non-movie and adult-flagged exclusions, keeps missing years/genres as unknown,
+stores missing or impossible runtimes as `None`, and normalizes genres and text.
+It retains the existing 1990 lower year boundary. IMDb release regions come
+from `title.akas` and are release markets, not production origin. IMDb does not
+provide plots, so generated synopsis text is metadata, not a plot description.
+The importer writes `data/imdb_import_audit.jsonl`.
 
-`data/build_popular_movies.py` then keeps non-adult titles with at least 10,000
-votes that have a title, year and genres, drops titles that duplicate a curated
-record (normalized title plus year), ranks by votes then rating, removes
-duplicate title-plus-year pairs, and takes the top 1,000 (six pinned titles are
-forced in). Its synopsis is again a metadata sentence.
+`data/build_popular_movies.py` selects titles with at least 10,000 votes and
+known title, year, and genres, removes matching curated records, and writes
+exactly 1,000 distinct normalized title/year/runtime records (with the existing
+pinned selections), or raises an error. Its transformations are logged to
+`data/popular_build_audit.jsonl`.
 
 Verify the current state with `python data/audit_catalog.py`. For the deployment
-catalog it reports per-field coverage, duplicate ids/IMDb ids/title-year pairs,
-malformed records, and coverage of imported IMDb fields. The imported
+catalog it reports per-field coverage, duplicate IDs/IMDb IDs/title-year-runtime
+identities, malformed records, and coverage of imported IMDb fields. Cleaning
+events are written to `data/catalog_audit_log.jsonl`. The imported
 `original_title` field was present for the 1,000 IMDb records but wasn't shown
 by the app; cards now display it when it differs from the display title. Its
 value comes directly from IMDb and is not rewritten.

@@ -29,6 +29,7 @@ from nlp.concepts import (
     normalize_phrase,
     synonym_fingerprint,
 )
+from data.catalog_version import catalog_version
 from nlp.smart_search import STOP_WORDS
 
 
@@ -96,9 +97,9 @@ def _synonym_entries():
     entries = defaultdict(list)
     reverse = build_reverse_index()
     for category, table in SYNONYM_TABLES:
-        for canonical, forms in table.items():
+        for canonical, forms in sorted(table.items()):
             canonical_key = normalize_phrase(canonical)
-            for form in {canonical, *forms}:
+            for form in sorted({canonical, *forms}):
                 alias = normalize_phrase(form)
                 if alias and alias not in {item["term"] for item in entries[canonical_key]}:
                     entries[canonical_key].append({
@@ -107,7 +108,7 @@ def _synonym_entries():
                         "category": category,
                     })
     aliases = {}
-    for alias, target in reverse.items():
+    for alias, target in sorted(reverse.items()):
         normalized_alias = normalize_phrase(alias)
         canonical = normalize_phrase(target["tag"])
         if normalized_alias and canonical:
@@ -119,7 +120,7 @@ def _associations(seed, seed_documents, term_documents, document_count):
     seed_support = len(seed_documents)
     scores = []
     seed_tokens = set(seed.split())
-    for term, supporting_documents in term_documents.items():
+    for term, supporting_documents in sorted(term_documents.items()):
         term_tokens = set(term.split())
         if (
             len(term_tokens) > 3
@@ -168,7 +169,7 @@ def build_concept_table(movies):
 
     synonym_entries, aliases = _synonym_entries()
     alias_forms = defaultdict(set)
-    for alias, canonical in aliases.items():
+    for alias, canonical in sorted(aliases.items()):
         alias_forms[canonical].add(alias)
     concepts = {}
     max_single_support = max(
@@ -185,7 +186,7 @@ def build_concept_table(movies):
     }
     seeds.update(synonym_entries)
     for seed in sorted(seeds):
-        forms = {seed, *alias_forms.get(seed, set())}
+        forms = sorted({seed, *alias_forms.get(seed, set())})
         supporting_documents = set().union(*(
             term_documents.get(form, set()) for form in forms
         ))
@@ -208,6 +209,7 @@ def build_concept_table(movies):
             "schema_version": SCHEMA_VERSION,
             "minimum_document_support": MIN_DOCUMENT_SUPPORT,
             "catalog_fingerprint": catalog_fingerprint(movies),
+            "catalog_version": catalog_version(movies),
             "synonym_fingerprint": synonym_fingerprint(),
             "catalog_records": len(movies),
             "concept_count": len(concepts),

@@ -1,6 +1,7 @@
 """Regression tests for explicit runtime limits and required content terms."""
 
 import sys
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,10 +10,16 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import movie_matches_runtime_limits
-from data.movies import _restore_curated_search_metadata
+from data.movies import _restore_curated_search_metadata, normalize_movie_record
+from data.synonyms import CONTENT_DESCRIPTOR_SYNONYMS, GENRE_SYNONYMS, MOOD_SYNONYMS, THEME_SYNONYMS
 from nlp.extract import extract_preferences
 from nlp.query import build_structured_query
-from nlp.scoring import is_excluded
+from nlp.scoring import (
+    evaluate_movie_constraints,
+    evaluate_runtime_status,
+    is_excluded,
+    rank_movies,
+)
 from nlp.smart_search import (
     _BM25_CACHE,
     _basic_assessment,
@@ -22,7 +29,7 @@ from nlp.smart_search import (
     local_understanding,
     retrieve_candidates,
 )
-from nlp.tfidf import load_or_build_tfidf_model
+from nlp.tfidf import build_tfidf_model, load_or_build_tfidf_model
 
 
 def movie(movie_id, title, synopsis, runtime=90):
@@ -134,6 +141,183 @@ class RuntimeConstraintTests(unittest.TestCase):
         self.assertIn("requested runtime", result["unsatisfied"])
 
 
+class UnknownConstraintTests(unittest.TestCase):
+    def test_load_normalization_uses_none_for_unknown_runtime_and_text(self):
+        normalized = normalize_movie_record({
+            "id": "synthetic",
+            "title": "Synthetic Unknown",
+            "runtime": "0",
+            "synopsis": "   ",
+            "genres": [" drama ", " "],
+        })
+
+        self.assertIsNone(normalized["runtime"])
+        self.assertIsNone(normalized["synopsis"])
+        self.assertEqual(normalized["genres"], ["drama"])
+
+    def test_constraints_distinguish_satisfied_violated_and_unverifiable(self):
+        preferences = {
+            "genres": [],
+            "moods": [],
+            "themes": [],
+            "excluded_genres": ["horror"],
+            "excluded_moods": [],
+            "excluded_themes": [],
+            "excluded_content_descriptors": [],
+            "excluded_keywords": [],
+            "runtime": {"min": None, "max": 100, "target": None},
+            "release_year": None,
+        }
+        verified = movie("verified", "Verified", "A drama story.", 90)
+        unknown = movie("unknown", "Unknown", "A story.", None)
+        unknown["genres"] = []
+        violated = movie("violated", "Violating Horror", "A horror story.", 120)
+        violated["genres"] = ["horror"]
+
+        self.assertEqual(evaluate_runtime_status(unknown, preferences["runtime"]), "unverifiable")
+        self.assertEqual(
+            evaluate_movie_constraints(unknown, preferences)["status"],
+            "unverifiable",
+        )
+        self.assertEqual(
+            evaluate_movie_constraints(verified, preferences)["status"],
+            "satisfied",
+        )
+        self.assertEqual(
+            evaluate_movie_constraints(violated, preferences)["status"],
+            "violated",
+        )
+        self.assertFalse(movie_matches_runtime_limits(unknown, preferences))
+
+    def test_verified_results_rank_before_unverifiable_records(self):
+        preferences = {
+            "genres": ["drama"],
+            "moods": [],
+            "themes": [],
+            "excluded_genres": [],
+            "excluded_moods": [],
+            "excluded_themes": [],
+            "excluded_content_descriptors": [],
+            "excluded_keywords": [],
+            "free_text_keywords": [],
+            "runtime": {
+                "min": None, "max": 100, "target": None, "tolerance": 20,
+            },
+            "release_year": None,
+        }
+        unknown = movie("unknown", "Unknown Runtime", "A drama.", None)
+        verified = movie("verified", "Verified Runtime", "A drama.", 90)
+        records = [unknown, verified]
+
+        ranked = rank_movies(records, preferences, build_tfidf_model(records))
+
+        self.assertEqual(
+            [entry["movie"]["id"] for entry in ranked["results"]],
+            ["verified", "unknown"],
+        )
+        self.assertEqual(ranked["unverified_count"], 1)
+
+
+class ExclusionClosureTests(unittest.TestCase):
+    @staticmethod
+    def independent_scary_forms():
+        tables = (
+            GENRE_SYNONYMS, MOOD_SYNONYMS,
+            THEME_SYNONYMS, CONTENT_DESCRIPTOR_SYNONYMS,
+        )
+        forms = {"horror"}
+        for table in tables:
+            for canonical, aliases in table.items():
+                group = {canonical, *aliases}
+                if group.intersection(forms):
+                    forms.update(group)
+        for table in tables:
+            for canonical, aliases in table.items():
+                group = {canonical, *aliases}
+                if group.intersection(forms):
+                    forms.update(group)
+        return forms
+
+    @staticmethod
+    def independent_catalog_scan(movie, forms):
+        fields = [
+            movie.get("title", ""), movie.get("original_title", ""),
+            movie.get("synopsis", ""), movie.get("overview", ""),
+            movie.get("tagline", ""), movie.get("certification", ""),
+        ]
+        for key in (
+            "genres", "mood_tags", "themes", "keywords",
+            "content_descriptors", "production_countries",
+        ):
+            value = movie.get(key) or []
+            fields.extend(value if isinstance(value, list) else [value])
+        words = [
+            token for field in fields
+            for token in re.findall(r"[a-z0-9]+", str(field).casefold())
+        ]
+        return any(
+            words[index:index + len(form_words)] == form_words
+            for form in forms
+            for form_words in [
+                re.findall(r"[a-z0-9]+", form.casefold())
+            ]
+            if form_words
+            for index in range(len(words) - len(form_words) + 1)
+        )
+
+    def test_scary_exclusion_closes_over_horror_and_mood_tags(self):
+        forms = self.independent_scary_forms()
+        movies = [
+            movie("genre", "Synthetic Genre Record", "A story.", 90),
+            movie("mood", "Synthetic Mood Record", "A story.", 90),
+            movie("keyword", "Synthetic Keyword Record", "A story.", 90),
+            movie("substring", "Synthetic Substring Record", "A horrorless story.", 90),
+        ]
+        movies[0]["genres"] = ["horror"]
+        movies[1]["mood_tags"] = ["scary"]
+        movies[2]["keywords"] = ["spooky"]
+        preferences = {
+            "excluded_genres": ["horror"],
+            "excluded_moods": [],
+            "excluded_themes": [],
+            "excluded_content_descriptors": [],
+            "excluded_keywords": [],
+        }
+        scary_preferences = {
+            **preferences,
+            "excluded_genres": [],
+            "excluded_moods": ["scary"],
+        }
+
+        for record in movies:
+            with self.subTest(movie_id=record["id"]):
+                expected = self.independent_catalog_scan(record, forms)
+                self.assertEqual(is_excluded(record, preferences), expected)
+                self.assertEqual(
+                    is_excluded(record, scary_preferences), expected,
+                )
+        self.assertTrue(is_excluded(movies[1], preferences))
+        self.assertTrue(is_excluded(movies[2], preferences))
+        self.assertFalse(is_excluded(movies[3], preferences))
+
+    def test_inclusion_uses_the_same_cross_category_closure(self):
+        horror_genre = movie("genre", "Synthetic Genre Record", "A story.", 90)
+        horror_genre["genres"] = ["horror"]
+        preferences = {
+            "genres": [], "moods": ["scary"], "themes": [],
+            "excluded_genres": [], "excluded_moods": [],
+            "excluded_themes": [], "excluded_content_descriptors": [],
+            "excluded_keywords": [],
+            "runtime": {"min": None, "max": None, "target": None},
+            "release_year": None,
+        }
+
+        self.assertEqual(
+            evaluate_movie_constraints(horror_genre, preferences)["status"],
+            "satisfied",
+        )
+
+
 class RequiredKeywordTests(unittest.TestCase):
     def test_catalog_genre_aliases_resolve_without_music_musical_collision(self):
         for query, expected in (
@@ -184,13 +368,13 @@ class RequiredKeywordTests(unittest.TestCase):
         self.assertEqual(runtime_preferences["runtime"]["max"], 90)
         self.assertEqual(runtime_preferences["excluded_keywords"], [])
 
-    def test_negated_country_alias_and_fuzzy_synonym_stay_exclusions(self):
+    def test_negated_country_alias_and_in_vocabulary_word_stay_exclusions(self):
         country_term = build_structured_query("movies without america")
         self.assertEqual(country_term["country"], "")
         self.assertEqual(country_term["preferences"]["excluded_keywords"], ["america"])
 
         synonym_term = extract_preferences("movies without adventures")
-        self.assertEqual(synonym_term["excluded_genres"], ["adventure"])
+        self.assertEqual(synonym_term["excluded_genres"], [])
         self.assertEqual(synonym_term["excluded_keywords"], ["adventures"])
 
     def test_country_names_inside_plot_phrases_remain_search_text(self):

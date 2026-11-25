@@ -8,6 +8,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from data.award_winners import annotate_awards
+from data.audit_catalog import clean_catalog, write_catalog_audit_log
 
 
 DATA_DIR = Path(__file__).resolve().parent
@@ -37,7 +38,11 @@ def core_titles():
         and any(isinstance(target, ast.Name) and target.id == "MOVIES" for target in node.targets)
     )
     return {
-        (normalized_title(movie["title"]), movie["release_year"])
+        (
+            normalized_title(movie["title"]),
+            movie["release_year"],
+            movie.get("runtime"),
+        )
         for movie in ast.literal_eval(assignment.value)
     }
 
@@ -47,15 +52,24 @@ def build_popular_movies():
         raise FileNotFoundError(f"Missing local IMDb catalog: {SOURCE_PATH}")
 
     excluded_titles = core_titles()
-    source_movies = json.loads(SOURCE_PATH.read_text(encoding="utf-8"))
+    source_movies, source_events = clean_catalog(
+        json.loads(SOURCE_PATH.read_text(encoding="utf-8"))
+    )
+    write_catalog_audit_log(
+        source_events,
+        DATA_DIR / "popular_build_audit.jsonl",
+    )
     candidates = [
         movie for movie in source_movies
         if movie.get("title")
         and movie.get("release_year")
         and movie.get("genres")
-        and not movie.get("is_adult")
         and movie.get("vote_count", 0) >= MINIMUM_VOTES
-        and (normalized_title(movie["title"]), movie["release_year"]) not in excluded_titles
+        and (
+            normalized_title(movie["title"]),
+            movie["release_year"],
+            movie.get("runtime"),
+        ) not in excluded_titles
     ]
     candidates.sort(key=lambda movie: (
         -(movie.get("vote_count") or 0),
@@ -65,23 +79,32 @@ def build_popular_movies():
     ))
 
     popular_movies = []
-    seen = set()
-    candidate_by_title = {
-        (normalized_title(movie["title"]), movie["release_year"]): movie
-        for movie in source_movies
-        if movie.get("title") and not movie.get("is_adult")
-    }
+    seen_ids = set()
+    candidate_by_title = {}
+    for movie in source_movies:
+        if not movie.get("title") or not movie.get("release_year") or not movie.get("genres"):
+            continue
+        key = (normalized_title(movie["title"]), movie["release_year"])
+        existing = candidate_by_title.get(key)
+        if existing is None or movie.get("vote_count", 0) > existing.get("vote_count", 0):
+            candidate_by_title[key] = movie
     ordered_candidates = [
         candidate_by_title[key]
         for key in PINNED_TITLES
-        if key in candidate_by_title and key not in excluded_titles
+        if key in candidate_by_title
+        and (
+            normalized_title(candidate_by_title[key]["title"]),
+            candidate_by_title[key]["release_year"],
+            candidate_by_title[key].get("runtime"),
+        ) not in excluded_titles
     ]
     ordered_candidates.extend(candidates)
     for source_movie in ordered_candidates:
-        title_key = (normalized_title(source_movie["title"]), source_movie["release_year"])
-        if title_key in seen:
+        identity = str(source_movie.get("imdb_id") or source_movie.get("id") or "")
+        if identity and identity in seen_ids:
             continue
-        seen.add(title_key)
+        if identity:
+            seen_ids.add(identity)
         movie = dict(source_movie)
         movie["id"] = 66 + len(popular_movies)
         genres = ", ".join(movie["genres"])
@@ -101,6 +124,15 @@ def build_popular_movies():
     if len(popular_movies) != POPULAR_MOVIE_COUNT:
         raise ValueError(f"Expected {POPULAR_MOVIE_COUNT} movies, found {len(popular_movies)}")
 
+    popular_movies, output_events = clean_catalog(popular_movies)
+    write_catalog_audit_log(
+        [*source_events, *output_events],
+        DATA_DIR / "popular_build_audit.jsonl",
+    )
+    if len(popular_movies) != POPULAR_MOVIE_COUNT:
+        raise ValueError(f"Cleaning left {len(popular_movies)} popular movies")
+    for index, movie in enumerate(popular_movies, start=66):
+        movie["id"] = index
     annotate_awards(popular_movies)
     OUTPUT_PATH.write_text(json.dumps(popular_movies, ensure_ascii=False), encoding="utf-8")
     return popular_movies

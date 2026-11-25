@@ -12,8 +12,8 @@ SCHEMA (every record is a dict with these keys):
     title               str
     synopsis            str     1-3 sentence free text description
     genres              list[str]   canonical genre tags (lowercase)
-    runtime             int     minutes
-    release_year        int
+    runtime             int | None     minutes
+    release_year        int | None
     themes              list[str]   canonical theme tags (lowercase)
     mood_tags           list[str]   canonical mood tags (lowercase)
     keywords            list[str]   free-form searchable keywords
@@ -63,6 +63,45 @@ def _restore_curated_search_metadata(imported_movies, curated_movies):
                 movie[field] = list(dict.fromkeys([*(movie.get(field) or []), *values]))
 
     return imported_movies
+
+
+def normalize_movie_record(movie):
+    normalized = dict(movie)
+    runtime = normalized.get("runtime")
+    try:
+        numeric_runtime = float(runtime)
+    except (TypeError, ValueError):
+        numeric_runtime = 0.0
+    normalized["runtime"] = (
+        int(numeric_runtime)
+        if not isinstance(runtime, bool)
+        and numeric_runtime > 0
+        and numeric_runtime.is_integer()
+        else None
+    )
+    for field in (
+        "synopsis", "overview", "tagline", "original_title", "certification",
+        "content_rating", "rating_certificate", "director", "writer",
+        "language", "nationality", "quality",
+    ):
+        value = normalized.get(field)
+        if isinstance(value, str):
+            normalized[field] = value.strip() or None
+    for field in (
+        "genres", "themes", "mood_tags", "keywords", "content_descriptors",
+    ):
+        value = normalized.get(field)
+        if isinstance(value, str):
+            values = [value]
+        elif isinstance(value, list):
+            values = value
+        else:
+            values = []
+        normalized[field] = [
+            item.strip() for item in values
+            if isinstance(item, str) and item.strip()
+        ]
+    return normalized
 
 
 MOVIES = [
@@ -888,3 +927,7 @@ if PUBLIC_ENRICHMENT_PATH.is_file():
                     movie[key] = value
 
 annotate_awards(MOVIES)
+from .audit_catalog import clean_catalog, write_catalog_audit_log
+
+MOVIES, CATALOG_CLEANING_EVENTS = clean_catalog(MOVIES)
+write_catalog_audit_log(CATALOG_CLEANING_EVENTS)

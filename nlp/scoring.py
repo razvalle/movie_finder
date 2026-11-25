@@ -109,6 +109,76 @@ def _movie_text_fields(movie):
     return [str(value) for value in fields if value]
 
 
+def _movie_tag_text_fields(movie):
+    fields = [
+        movie.get("synopsis", ""), movie.get("overview", ""),
+    ]
+    for key in (
+        "genres", "mood_tags", "themes", "keywords", "content_descriptors",
+    ):
+        value = movie.get(key)
+        if isinstance(value, str):
+            fields.append(value)
+        elif isinstance(value, list):
+            fields.extend(item for item in value if isinstance(item, str))
+    return [value for value in fields if value]
+
+
+def _concept_forms(tag, preferred_table=None):
+    tables = (
+        preferred_table,
+        GENRE_SYNONYMS,
+        MOOD_SYNONYMS,
+        THEME_SYNONYMS,
+        CONTENT_DESCRIPTOR_SYNONYMS,
+    )
+    forms = {tag}
+    for table in tables:
+        if not table:
+            continue
+        for canonical, aliases in table.items():
+            if tag == canonical or tag in aliases:
+                forms.update((canonical, *aliases))
+    related_forms = set(forms)
+    for table in tables[1:]:
+        for canonical, aliases in table.items():
+            group = {canonical, *aliases}
+            if related_forms.intersection(group):
+                forms.update(group)
+    return forms
+
+
+def _movie_contains_concept(movie, tag, preferred_table=None):
+    return any(
+        _contains_phrase(field, form)
+        for field in _movie_tag_text_fields(movie)
+        for form in _concept_forms(tag, preferred_table)
+    )
+
+
+def _fields_contain_concept(fields, tag, preferred_table):
+    return any(
+        _contains_phrase(field, form)
+        for field in fields
+        for form in _concept_forms(tag, preferred_table)
+    )
+
+
+def _concept_overlap_fraction(requested, movie, preferred_table=None):
+    if not requested:
+        return None
+    matched = [
+        tag for tag in requested
+        if _movie_contains_concept(movie, tag, preferred_table)
+    ]
+    missing = [tag for tag in requested if tag not in matched]
+    return {
+        "fraction": len(matched) / len(requested),
+        "matched": matched,
+        "missing": missing,
+    }
+
+
 def overlap_fraction(requested, actual):
     """Returns None if `requested` is empty (category not requested), else {"fraction", "matched", "missing"}."""
     if not requested:
@@ -121,6 +191,8 @@ def overlap_fraction(requested, actual):
 
 def score_runtime(constraint, movie_runtime):
     min_, max_, target, tolerance = constraint["min"], constraint["max"], constraint["target"], constraint["tolerance"]
+    if movie_runtime is None:
+        return None
     if min_ is None and max_ is None and target is None:
         return None  # not requested
 
@@ -146,6 +218,8 @@ def score_runtime(constraint, movie_runtime):
 def score_release_year(constraint, movie_year):
     if not constraint:
         return None
+    if movie_year is None:
+        return None
     min_, max_ = constraint["min"], constraint["max"]
     if min_ is not None and movie_year < min_:
         return max(0.0, 1 - (min_ - movie_year) / 15)
@@ -154,21 +228,36 @@ def score_release_year(constraint, movie_year):
     return 1.0
 
 
+def evaluate_runtime_status(movie, constraint):
+    constraint = constraint or {}
+    low, high, target = (
+        constraint.get("min"), constraint.get("max"), constraint.get("target"),
+    )
+    if low is None and high is None and target is None:
+        return "satisfied"
+    runtime = movie.get("runtime")
+    if isinstance(runtime, bool) or not isinstance(runtime, (int, float)) or runtime <= 0:
+        return "unverifiable"
+    if low is not None and runtime < low:
+        return "violated"
+    if high is not None and runtime > high:
+        return "violated"
+    return "satisfied"
+
+
 def is_excluded(movie, preferences):
     """True if the movie matches any explicitly excluded catalog attribute."""
-    searchable_fields = _movie_text_fields(movie)
     exclusions = (
         (preferences.get("excluded_genres", []), GENRE_SYNONYMS),
         (preferences.get("excluded_moods", []), MOOD_SYNONYMS),
         (preferences.get("excluded_themes", []), THEME_SYNONYMS),
         (preferences.get("excluded_content_descriptors", []), CONTENT_DESCRIPTOR_SYNONYMS),
     )
+    searchable_fields = _movie_text_fields(movie)
     for tags, synonym_table in exclusions:
         if any(
-            _contains_phrase(field, form)
-            for field in searchable_fields
+            _fields_contain_concept(searchable_fields, tag, synonym_table)
             for tag in tags
-            for form in {tag, *synonym_table.get(tag, [])}
         ):
             return True
     if any(
@@ -178,6 +267,103 @@ def is_excluded(movie, preferences):
     ):
         return True
     return False
+
+
+def evaluate_movie_constraints(movie, preferences, active_genres=None):
+    preferences = preferences or {}
+    checks = []
+    genres = list(dict.fromkeys([
+        *(preferences.get("genres") or []),
+        *(active_genres or []),
+    ]))
+    if genres:
+        actual_genres = movie.get("genres") or []
+        status = (
+            "satisfied" if any(
+                _movie_contains_concept(movie, tag, GENRE_SYNONYMS)
+                for tag in genres
+            )
+            else "unverifiable" if not actual_genres
+            else "violated"
+        )
+        checks.append({"constraint": "genre", "status": status})
+
+    runtime = preferences.get("runtime") or {}
+    runtime_status = evaluate_runtime_status(movie, runtime)
+    if any(runtime.get(key) is not None for key in ("min", "max", "target")):
+        checks.append({"constraint": "runtime", "status": runtime_status})
+
+    year = preferences.get("release_year") or {}
+    if year and any(year.get(key) is not None for key in ("min", "max")):
+        movie_year = movie.get("release_year")
+        if not isinstance(movie_year, int) or isinstance(movie_year, bool) or movie_year <= 0:
+            year_status = "unverifiable"
+        elif (
+            year.get("min") is not None and movie_year < year["min"]
+        ) or (
+            year.get("max") is not None and movie_year > year["max"]
+        ):
+            year_status = "violated"
+        else:
+            year_status = "satisfied"
+        checks.append({"constraint": "release_year", "status": year_status})
+
+    if not genres and (preferences.get("moods") or preferences.get("themes")):
+        moods = preferences.get("moods") or []
+        themes = preferences.get("themes") or []
+        mood_tags = movie.get("mood_tags") or []
+        theme_tags = movie.get("themes") or []
+        if any(
+            _movie_contains_concept(movie, tag, MOOD_SYNONYMS)
+            for tag in moods
+        ) or any(
+            _movie_contains_concept(movie, tag, THEME_SYNONYMS)
+            for tag in themes
+        ):
+            descriptive_status = "satisfied"
+        elif (
+            (not moods or mood_tags)
+            and (not themes or theme_tags)
+        ):
+            descriptive_status = "violated"
+        else:
+            descriptive_status = "unverifiable"
+        checks.append({
+            "constraint": "mood_or_theme",
+            "status": descriptive_status,
+        })
+
+    exclusion_fields = {
+        "excluded_genres": ("genres", "genre"),
+        "excluded_moods": ("mood_tags", "mood"),
+        "excluded_themes": ("themes", "theme"),
+        "excluded_content_descriptors": ("content_descriptors", "content descriptor"),
+        "excluded_keywords": ("keywords", "keyword"),
+    }
+    active_exclusion_fields = [
+        (key, field, label)
+        for key, (field, label) in exclusion_fields.items()
+        if preferences.get(key)
+    ]
+    if active_exclusion_fields:
+        if is_excluded(movie, preferences):
+            exclusion_status = "violated"
+        elif any(not movie.get(field) for _, field, _ in active_exclusion_fields):
+            exclusion_status = "unverifiable"
+        else:
+            exclusion_status = "satisfied"
+        checks.append({
+            "constraint": "exclusions",
+            "status": exclusion_status,
+        })
+
+    statuses = {check["status"] for check in checks}
+    overall = (
+        "violated" if "violated" in statuses
+        else "unverifiable" if "unverifiable" in statuses
+        else "satisfied"
+    )
+    return {"status": overall, "checks": checks}
 
 
 def score_movie(
@@ -190,11 +376,21 @@ def score_movie(
     each factor's raw sub-score and matched/missing details, used by
     explain.py.
     """
-    genre_result = overlap_fraction(preferences["genres"], movie["genres"])
-    mood_result = overlap_fraction(preferences["moods"], movie["mood_tags"])
-    theme_result = overlap_fraction(preferences["themes"], movie["themes"])
-    runtime_score = score_runtime(preferences["runtime"], movie["runtime"])
-    year_score = score_release_year(preferences["release_year"], movie["release_year"])
+    genre_result = _concept_overlap_fraction(
+        preferences["genres"], movie, GENRE_SYNONYMS,
+    )
+    mood_result = _concept_overlap_fraction(
+        preferences["moods"], movie, MOOD_SYNONYMS,
+    )
+    theme_result = _concept_overlap_fraction(
+        preferences["themes"], movie, THEME_SYNONYMS,
+    )
+    runtime_score = score_runtime(
+        preferences["runtime"], movie.get("runtime"),
+    )
+    year_score = score_release_year(
+        preferences["release_year"], movie.get("release_year"),
+    )
     has_query_evidence = bool(
         query_evidence
         and (query_evidence.get("details") or query_evidence.get("associated_details"))
@@ -277,35 +473,14 @@ def rank_movies(
     """
     excluded_count = 0
     scored = []
-    mood_metadata_available = any(movie.get("mood_tags") for movie in movies)
-    theme_metadata_available = any(movie.get("themes") for movie in movies)
     query_vector = vectorize_query(preferences["free_text_keywords"], tfidf_model["idf"])
     query_norm = vector_norm(query_vector) if query_vector else 0.0
 
     for movie in movies:
         # An explicitly requested genre is a hard requirement. This keeps
         # broad requests such as "recommend horror" focused on that genre.
-        genre_matches = any(value in movie["genres"] for value in preferences["genres"])
-        mood_matches = any(value in movie["mood_tags"] for value in preferences["moods"])
-        theme_matches = any(value in movie["themes"] for value in preferences["themes"])
-
-        # A named genre is an explicit catalog filter. Descriptive moods and
-        # themes are alternatives: "grieving family dealing with loss" can
-        # match either the sad mood or the grief theme without over-filtering.
-        if apply_filters and preferences["genres"] and not genre_matches:
-            excluded_count += 1
-            continue
-        available_mood_match = mood_matches if mood_metadata_available else False
-        available_theme_match = theme_matches if theme_metadata_available else False
-        has_available_descriptive_filter = (
-            (preferences["moods"] and mood_metadata_available)
-            or (preferences["themes"] and theme_metadata_available)
-        )
-        if apply_filters and not preferences["genres"] and has_available_descriptive_filter:
-            if not (available_mood_match or available_theme_match):
-                excluded_count += 1
-                continue
-        if apply_filters and is_excluded(movie, preferences):
+        constraint_result = evaluate_movie_constraints(movie, preferences)
+        if apply_filters and constraint_result["status"] == "violated":
             excluded_count += 1
             continue
         movie_id = movie["id"]
@@ -331,7 +506,20 @@ def rank_movies(
             if max(keyword_score or 0, evidence_score) < MIN_DESCRIPTION_SIMILARITY:
                 excluded_count += 1
                 continue
-        scored.append({"movie": movie, "percent": outcome["percent"], "breakdown": outcome["breakdown"]})
+        scored.append({
+            "movie": movie,
+            "percent": outcome["percent"],
+            "breakdown": outcome["breakdown"],
+            "constraint_status": constraint_result["status"],
+            "constraint_checks": constraint_result["checks"],
+            "unverified": constraint_result["status"] == "unverifiable",
+        })
 
-    scored.sort(key=lambda r: r["percent"], reverse=True)
-    return {"results": scored, "excluded_count": excluded_count}
+    scored.sort(key=lambda result: (
+        result["unverified"], -result["percent"],
+    ))
+    return {
+        "results": scored,
+        "excluded_count": excluded_count,
+        "unverified_count": sum(result["unverified"] for result in scored),
+    }

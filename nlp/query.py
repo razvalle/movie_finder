@@ -6,15 +6,22 @@ filters from the residual semantic description before scoring the catalog.
 
 import re
 from datetime import date
-from difflib import SequenceMatcher
+from functools import lru_cache
 
 import pycountry
 
-from .extract import extract_preferences
+from .extract import (
+    NEGATION_SYNTAX_TOKENS,
+    REVERSE_INDEX,
+    _catalog_word_vocabulary,
+    extract_preferences,
+)
+from .fuzzy import correct_unknown_token
 from .negation import find_negation_scopes, is_within_negation_scope
 from .normalize import normalize_text
-from .tokenize import tokenize
+from .tokenize import STOPWORDS, tokenize
 from .catalog_matching import load_query_rules
+from .runtime import WORD_NUMBERS
 
 RANKING_PATTERNS = {
     "best": ("best", "top", "good", "great", "highest rated", "highly rated", "greatest"),
@@ -32,6 +39,34 @@ EXPLICIT_SYNTAX_TOKENS = {
 COUNTRY_ALIASES = load_query_rules()["country_demonyms"]
 
 SHORT_COUNTRY_ALIASES = {"ph", "us", "uk", "jp", "jpn", "sk", "kr", "uae"}
+
+
+@lru_cache(maxsize=1)
+def _country_alias_document_frequency():
+    from data.movies import MOVIES
+
+    counts = {}
+    country_terms = dict(COUNTRY_PHRASES)
+    country_terms.update(COUNTRY_ALIASES)
+    for alias, code in country_terms.items():
+        if " " in alias:
+            continue
+        count = 0
+        for movie in MOVIES:
+            values = movie.get("production_countries") or movie.get("origin_regions") or []
+            if isinstance(values, str):
+                values = [values]
+            country_codes = {
+                str(
+                    value.get("iso_3166_1", value.get("code", ""))
+                    if isinstance(value, dict) else value
+                ).strip().upper()
+                for value in values
+            }
+            if code.upper() in country_codes:
+                count += 1
+        counts[alias] = count
+    return tuple(sorted(counts.items()))
 
 
 def _phrase_is_negated(text, phrase):
@@ -116,20 +151,43 @@ def detect_country(normalized_text):
             and not _phrase_is_descriptive(normalized_text, phrase)
         ):
             return code, phrase
-    for phrase, code in sorted(COUNTRY_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
-        if len(phrase) < 5 or " " in phrase:
-            continue
-        if not re.search(r"\b(?:movie|movies|film|films|cinema|from|made|country)\b", normalized_text):
-            continue
-        if re.search(rf"\b(?:movies?|films?)\s+in\s+{re.escape(phrase)}\b", normalized_text):
-            continue
-        for token in normalized_text.split():
-            if (
-                SequenceMatcher(None, token, phrase).ratio() >= 0.88
-                and not _phrase_is_negated(normalized_text, token)
-                and not _phrase_is_descriptive(normalized_text, token)
-            ):
-                return code, token
+    if not re.search(
+        r"\b(?:movie|movies|film|films|cinema|from|made|country)\b",
+        normalized_text,
+    ):
+        return "", ""
+    country_vocabulary = {
+        alias for alias in (*COUNTRY_PHRASES, *COUNTRY_ALIASES)
+        if " " not in alias
+    }
+    known_vocabulary = set(_catalog_word_vocabulary()) | {
+        token for phrase in REVERSE_INDEX
+        for token in tokenize(phrase)
+        if token != ","
+    }
+    protected_tokens = (
+        set(STOPWORDS) | set(NEGATION_SYNTAX_TOKENS)
+        | set(EXPLICIT_SYNTAX_TOKENS) | set(WORD_NUMBERS)
+    )
+    frequencies = dict(_country_alias_document_frequency())
+    for token in normalized_text.split():
+        corrected = correct_unknown_token(
+            token,
+            country_vocabulary,
+            document_frequency=frequencies,
+            protected_tokens=protected_tokens,
+            known_tokens=known_vocabulary,
+        )
+        if (
+            corrected
+            and not re.search(
+                rf"\b(?:movies?|films?)\s+in\s+{re.escape(corrected)}\b",
+                normalized_text,
+            )
+            and not _phrase_is_negated(normalized_text, token)
+            and not _phrase_is_descriptive(normalized_text, token)
+        ):
+            return COUNTRY_ALIASES.get(corrected, COUNTRY_PHRASES.get(corrected)), token
     return "", ""
 
 
@@ -192,7 +250,7 @@ def detect_cast_gender_constraint(normalized_text):
     return None
 
 
-def build_structured_query(raw_query, content_text=None):
+def build_structured_query(raw_query, content_text=None, allow_fuzzy_correction=True):
     """Return the explicit filters, ranking intent, and semantic residual text."""
     normalized = normalize_text(raw_query).replace(",", " ")
     country, country_phrase = detect_country(normalized)
@@ -200,7 +258,10 @@ def build_structured_query(raw_query, content_text=None):
     cleaned = _remove_phrases(normalized, [country_phrase, ranking_phrase])
     if content_text is not None:
         cleaned = content_text
-    preferences = extract_preferences(cleaned)
+    preferences = extract_preferences(
+        cleaned,
+        allow_fuzzy_correction=allow_fuzzy_correction,
+    )
     cast_constraint = detect_cast_gender_constraint(normalized)
     rules = load_query_rules()
     audience_intents = []
@@ -242,6 +303,18 @@ def build_structured_query(raw_query, content_text=None):
         preferences["genres"] = sorted(set(preferences["genres"]) | {"horror"})
     if re.search(r"\b(?:haunted house|ghost story|haunting house)\b", normalized):
         preferences["genres"] = sorted(set(preferences["genres"]) | {"horror"})
+
+    unresolved_ambiguous_tags = {
+        (item["category"], item["tag"])
+        for item in preferences.get("ambiguous_interpretations", [])
+    }
+    for key, category in (
+        ("genres", "genre"), ("moods", "mood"), ("themes", "theme"),
+    ):
+        preferences[key] = [
+            value for value in preferences[key]
+            if (category, value) not in unresolved_ambiguous_tags
+        ]
 
     people, languages = detect_people_and_language(normalized)
     directors = re.findall(r"\bdirected by\s+([a-z][a-z .'-]+)", normalized)

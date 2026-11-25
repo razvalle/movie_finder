@@ -21,12 +21,24 @@
     card.click();
   }
 
-  function surpriseMe() {
+  function seededRandom(seed) {
+    let state = 2166136261;
+    for (const character of String(seed)) {
+      state = Math.imul(state ^ character.charCodeAt(0), 16777619) >>> 0;
+    }
+    return () => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return state / 0x100000000;
+    };
+  }
+
+  function surpriseMe(seed) {
     if (!surpriseButton) return;
     // Only movies rated 7.0+ qualify; the current rendered cards already honor active filters.
     const candidates = cards.filter((card) => rating(card) >= 7);
     if (!candidates.length) return;
-    openMovie(candidates[Math.floor(Math.random() * candidates.length)]);
+    const random = seededRandom(seed);
+    openMovie(candidates[Math.floor(random() * candidates.length)]);
   }
 
   function setCompareState(card, selected) {
@@ -132,7 +144,12 @@
     }
   }
 
-  surpriseButton?.addEventListener("click", surpriseMe);
+  surpriseButton?.addEventListener("click", () => {
+    const query = document.querySelector("#q")?.value.trim() || "";
+    const titles = cards.map((card) => card.dataset.detailTitle || "").join("|");
+    const seed = `${new Date().toISOString().slice(0, 10)}|${query}|${titles}`;
+    surpriseMe(seed);
+  });
   copyButton?.addEventListener("click", copySearchLink);
   cards.forEach((card) => {
     const button = card.querySelector("[data-compare-select]");

@@ -3,10 +3,13 @@
 import hashlib
 import json
 import logging
+import os
 import re
+import time
 import unicodedata
 from pathlib import Path
 
+from data.catalog_version import catalog_version
 from data.synonyms import (
     CONTENT_DESCRIPTOR_SYNONYMS,
     GENRE_SYNONYMS,
@@ -15,7 +18,7 @@ from data.synonyms import (
 )
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MIN_DOCUMENT_SUPPORT = 2
 MAX_ASSOCIATIONS = 64
 MAX_EXPANSION_WEIGHT = 0.30
@@ -89,8 +92,8 @@ def synonym_fingerprint():
     return hashlib.sha256(encoded).hexdigest()
 
 
-def empty_concept_table():
-    return {"enabled": False, "concepts": {}, "aliases": {}}
+def empty_concept_table(status="unavailable"):
+    return {"enabled": False, "concepts": {}, "aliases": {}, "status": status}
 
 
 def _valid_concept_rows(concepts):
@@ -120,19 +123,22 @@ def _valid_concept_rows(concepts):
 
 def load_concept_table(movies, path=CONCEPT_TABLE_PATH):
     """Return no expansions when the generated table is missing or stale."""
+    version = catalog_version(movies)
     try:
         table = json.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
         _LOGGER.info("Concept-expansion table is missing; using lexical search only.")
-        return empty_concept_table()
+        return empty_concept_table("missing")
     except (OSError, json.JSONDecodeError) as error:
         _LOGGER.warning("Concept-expansion table cannot be read; using lexical search only: %s", error)
-        return empty_concept_table()
+        return empty_concept_table("invalid")
 
     metadata = table.get("metadata") if isinstance(table, dict) else None
     current = isinstance(metadata, dict) and (
         metadata.get("schema_version") == SCHEMA_VERSION
         and metadata.get("catalog_fingerprint") == catalog_fingerprint(movies)
+        and metadata.get("catalog_version") == version
+        and metadata.get("catalog_records") == version["record_count"]
         and metadata.get("synonym_fingerprint") == synonym_fingerprint()
     )
     concepts = table.get("concepts") if isinstance(table, dict) else None
@@ -148,7 +154,7 @@ def load_concept_table(movies, path=CONCEPT_TABLE_PATH):
         )
     ):
         _LOGGER.warning("Concept-expansion table is stale or invalid; using lexical search only.")
-        return empty_concept_table()
+        return empty_concept_table("stale")
     return {
         "enabled": True,
         "concepts": concepts,
@@ -157,7 +163,69 @@ def load_concept_table(movies, path=CONCEPT_TABLE_PATH):
             for alias, key in aliases.items()
             if isinstance(alias, str) and isinstance(key, str) and key in concepts
         },
+        "catalog_version": version,
+        "status": "ready",
     }
+
+
+def load_or_rebuild_concept_table(
+    movies,
+    path=CONCEPT_TABLE_PATH,
+    max_rebuild_records=5000,
+    max_rebuild_seconds=3.0,
+):
+    table = load_concept_table(movies, path)
+    if table["enabled"]:
+        return table
+    if len(movies) > max_rebuild_records:
+        _LOGGER.error(
+            "Concept table is %s for %s records; local rebuild limit is %s.",
+            table["status"],
+            len(movies),
+            max_rebuild_records,
+        )
+        return table
+
+    from data.build_concept_expansions import build_concept_table
+
+    started = time.perf_counter()
+    try:
+        generated = build_concept_table(movies)
+    except (ImportError, KeyError, TypeError, ValueError, ArithmeticError) as error:
+        _LOGGER.exception("Concept-table rebuild failed; using lexical search: %s", error)
+        return table
+    elapsed = time.perf_counter() - started
+    if elapsed > max_rebuild_seconds:
+        _LOGGER.error(
+            "Concept-table rebuild took %.3fs, over the %.1fs startup budget; using lexical search.",
+            elapsed,
+            max_rebuild_seconds,
+        )
+        return table
+
+    destination = Path(path)
+    temporary_path = destination.with_name(f"{destination.name}.{os.getpid()}.tmp")
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path.write_text(
+            json.dumps(generated, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary_path.replace(destination)
+    except OSError as error:
+        _LOGGER.error("Rebuilt concept table could not be saved; using lexical search: %s", error)
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as cleanup_error:
+            _LOGGER.warning("Incomplete concept table could not be removed: %s", cleanup_error)
+        return table
+
+    rebuilt = load_concept_table(movies, path)
+    if not rebuilt["enabled"]:
+        _LOGGER.error("Rebuilt concept table failed validation; using lexical search.")
+    return rebuilt
 
 
 def expand_query(concepts, understanding, table, excluded_terms=()):

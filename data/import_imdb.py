@@ -12,9 +12,14 @@ searchable synopsis is therefore a concise metadata description.
 """
 
 import csv
+import datetime
 import gzip
 import json
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data.audit_catalog import clean_catalog
 
 csv.field_size_limit(10_000_000)
 
@@ -25,7 +30,7 @@ RATINGS_PATH = IMDB_DIR / "title.ratings.tsv.gz"
 AKAS_PATH = IMDB_DIR / "title.akas.tsv.gz"
 OUTPUT_PATH = DATA_DIR / "imdb_movies.json"
 START_YEAR = 1990
-END_YEAR = 2026
+END_YEAR = datetime.date.today().year
 
 
 def values(value):
@@ -65,21 +70,57 @@ def build_catalog():
 
     ratings = load_ratings()
     catalog = []
-    with gzip.open(BASICS_PATH, "rt", encoding="utf-8", newline="") as stream:
+    audit_path = DATA_DIR / "imdb_import_audit.jsonl"
+    with gzip.open(BASICS_PATH, "rt", encoding="utf-8", newline="") as stream, \
+            audit_path.open("w", encoding="utf-8") as audit_log:
         for row in csv.DictReader(stream, delimiter="\t"):
+            source_record = {
+                "imdb_id": row.get("tconst"),
+                "title": row.get("primaryTitle"),
+                "original_title": row.get("originalTitle"),
+                "title_type": row.get("titleType"),
+                "is_adult": row.get("isAdult"),
+                "release_year": row.get("startYear"),
+                "end_year": row.get("endYear"),
+                "runtime": row.get("runtimeMinutes"),
+                "genres": row.get("genres"),
+            }
             if row["titleType"] != "movie":
+                audit_log.write(json.dumps({
+                    "action": "remove",
+                    "reason": "non-movie title_type",
+                    "record_id": row.get("tconst"),
+                    "record": source_record,
+                }, ensure_ascii=False) + "\n")
                 continue
-            if row["startYear"] == "\\N":
+            if row["isAdult"] == "1":
+                audit_log.write(json.dumps({
+                    "action": "remove",
+                    "reason": "adult-flagged record",
+                    "record_id": row.get("tconst"),
+                    "record": source_record,
+                }, ensure_ascii=False) + "\n")
                 continue
-            year = int(row["startYear"])
-            if not START_YEAR <= year <= END_YEAR:
+            year = None if row["startYear"] == "\\N" else int(row["startYear"])
+            if year is not None and year < START_YEAR:
+                audit_log.write(json.dumps({
+                    "action": "remove",
+                    "reason": "outside configured year floor",
+                    "record_id": row.get("tconst"),
+                    "record": source_record,
+                }, ensure_ascii=False) + "\n")
                 continue
+            if year is not None and year > END_YEAR:
+                audit_log.write(json.dumps({
+                    "action": "normalize",
+                    "reason": "future release year set to unknown",
+                    "record_id": row.get("tconst"),
+                    "record": source_record,
+                    "changes": {"release_year": {"from": year, "to": None}},
+                }, ensure_ascii=False) + "\n")
+                year = None
             genres = values(row["genres"])
-            if not genres:
-                continue
             runtime = None if row["runtimeMinutes"] == "\\N" else int(row["runtimeMinutes"])
-            if runtime is None:
-                runtime = 0
             rating = ratings.get(row["tconst"], {})
             title = row["primaryTitle"]
             genre_text = ", ".join(genres)
@@ -89,15 +130,19 @@ def build_catalog():
                 "title": title,
                 "original_title": row["originalTitle"],
                 "title_type": row["titleType"],
-                "is_adult": row["isAdult"] == "1",
-                "synopsis": f"{title} ({year}), a {genre_text.lower()} movie.",
+                "is_adult": False,
+                "synopsis": (
+                    f"{title} ({year}), a {genre_text.lower()} movie."
+                    if year is not None
+                    else f"{title}, a {genre_text.lower()} movie."
+                ),
                 "genres": [genre.lower() for genre in genres],
                 "runtime": runtime,
                 "release_year": year,
                 "themes": [],
                 "mood_tags": [],
                 "keywords": [title, *genres],
-                "content_descriptors": ["adult"] if row["isAdult"] == "1" else [],
+                "content_descriptors": [],
                 "average_rating": rating.get("average_rating"),
                 "vote_count": rating.get("vote_count", 0),
             })
@@ -105,9 +150,17 @@ def build_catalog():
     regions = load_regions({movie["imdb_id"] for movie in catalog})
     for movie in catalog:
         movie["origin_regions"] = sorted(regions.get(movie["imdb_id"], set()))
-        movie["nationality"] = movie["origin_regions"][0] if movie["origin_regions"] else "Unknown"
+        movie["nationality"] = movie["origin_regions"][0] if movie["origin_regions"] else None
 
-    catalog.sort(key=lambda movie: (movie["release_year"], movie["title"].lower(), movie["imdb_id"]))
+    catalog, cleaning_events = clean_catalog(catalog, current_year=END_YEAR)
+    with audit_path.open("a", encoding="utf-8") as audit_log:
+        for event in cleaning_events:
+            audit_log.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+    catalog.sort(key=lambda movie: (
+        movie.get("release_year") or 0,
+        movie["title"].lower(),
+        movie["imdb_id"],
+    ))
     for index, movie in enumerate(catalog, start=1):
         movie["id"] = index
     OUTPUT_PATH.write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")

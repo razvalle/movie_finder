@@ -183,9 +183,9 @@
       </div>
       <div class="search-feedback" aria-live="polite">
         {% if assistant_message %}
-          <p class="assistant-message" data-assistant-state="{{ assistant_state }}">{{ assistant_message }}</p>
+          <p class="assistant-message" data-assistant-state="{{ assistant_state }}">{{ assistant_message }}{% if exact_search_url %} <a href="{{ exact_search_url }}">Search exactly what you typed</a>{% endif %}</p>
         {% elif search_notice %}
-          <p class="search-notice">{{ search_notice }}</p>
+          <p class="search-notice">{{ search_notice }}{% if exact_search_url %} <a href="{{ exact_search_url }}">Search exactly what you typed</a>{% endif %}</p>
         {% endif %}
         {% if alternative_queries and assistant_state in ['empty', 'unmapped'] %}
           <ul class="search-alternatives">
@@ -389,7 +389,7 @@
                   {% if r.movie.get('release_year') %}<div class="movie-card__meta sr-only">· {{ r.movie.release_year }}</div>{% endif %}
                   {% if r.movie.get('original_title') and r.movie.original_title != r.movie.title %}<div class="movie-card__meta"><span data-i18n="originalTitle">Original title</span>: <span lang="und">{{ r.movie.original_title }}</span></div>{% endif %}
                   <div class="movie-card__genres" aria-label="Genres">{% for genre in r.movie.genres %}<span class="genre-pill" data-i18n-genre="{{ genre }}">{{ genre|title }}</span>{% endfor %}</div>
-                  <div class="movie-card__facts"><span><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg> {{ r.movie.runtime }} min</span><span><svg class="icon" aria-hidden="true"><use href="#icon-map-pin"></use></svg> {% if movie_origin_label(r.movie) %}{{ movie_origin_label(r.movie) }}{% else %}<span data-i18n="originUnavailable">Origin unavailable</span>{% endif %}</span></div>
+                  <div class="movie-card__facts"><span><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg> {% if r.movie.get('runtime') %}{{ r.movie.runtime }} min{% else %}Runtime unavailable{% endif %}</span><span><svg class="icon" aria-hidden="true"><use href="#icon-map-pin"></use></svg> {% if movie_origin_label(r.movie) %}{{ movie_origin_label(r.movie) }}{% else %}<span data-i18n="originUnavailable">Origin unavailable</span>{% endif %}</span></div>
                   <span class="runtime-fit" data-runtime-fit hidden></span>
                   {% if r.movie.get('certification') %}<span class="movie-age-rating" data-i18n="contentRating">Age rating</span><span class="movie-age-rating__value">{{ r.movie.certification }}</span>{% endif %}
                   <p class="movie-card__match-reason">{{ r.match_reason }}</p>
@@ -637,7 +637,7 @@
         <div><dt>Original language</dt><dd>0 · 0.0%</dd></div>
       </dl>
       <h3>Audit checks</h3>
-      <p>The audit checks duplicate IDs, IMDb IDs, and normalized title/year pairs: all 0. It checks for a title, a year from 1880–2100, runtime from 1–600 when present, non-empty genres, and ratings from 0–10: 0 malformed records.</p>
+      <p>The active catalog audit found 0 removals, 0 merges, 0 normalized records, and 0 unverified records. Duplicate IDs, IMDb IDs, and normalized title/year/runtime identities: all 0. Invalid runtime (outside 1–600 minutes) and release years (before 1880 or after the current year) are treated as unknown; the audit found 0 malformed records.</p>
       <p>IMDb synopsis templates are not counted as real plots. No plot, cast, or content-descriptor metadata has been fabricated to fill gaps.</p>
       <h3>Known limits</h3>
       <p>Plots, cast, and content descriptors are limited to locally imported/enriched fields. TMDB key configured: no; enrichment is opt-in and inactive without <code>TMDB_API_KEY</code>.</p>

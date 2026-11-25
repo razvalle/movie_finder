@@ -33,6 +33,7 @@ from flask import (
     render_template, request, url_for,
 )
 
+from data.catalog_version import catalog_version
 from data.movies import MOVIES
 from data.synonyms import (
     CONTENT_DESCRIPTOR_SYNONYMS,
@@ -52,11 +53,15 @@ from nlp.query import (
     detect_people_and_language,
 )
 from nlp.tfidf import (
-    build_tfidf_model,
     load_or_build_tfidf_model,
     movie_to_similarity_document_text,
 )
-from nlp.scoring import is_excluded, rank_movies
+from nlp.scoring import (
+    evaluate_movie_constraints,
+    evaluate_runtime_status,
+    is_excluded,
+    rank_movies,
+)
 from nlp.explain import explain_match, title_case
 from nlp.conversation import build_alternative_queries, build_assistant_message
 from nlp.smart_search import (
@@ -70,7 +75,8 @@ from nlp.smart_search import (
     retrieve_plain_candidates,
     rerank_candidates,
 )
-from nlp.concepts import normalize_phrase
+from nlp.concepts import load_or_rebuild_concept_table, normalize_phrase
+from nlp import smart_search as smart_search_module
 from nlp.cast_verification import classify_cast_gender, evaluate_cast_constraint
 from nlp.search_diagnostics import SearchTrace, write_search_record
 from nlp.catalog_matching import (
@@ -89,6 +95,21 @@ TITLE_STOP_WORDS = set(STOP_WORDS) | TOKEN_STOPWORDS
 
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
+CATALOG_VERSION = catalog_version(MOVIES)
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; base-uri 'self'; connect-src 'self'; "
+        "font-src 'self' data: https:; form-action 'self'; frame-ancestors 'self'; "
+        "img-src 'self' data: https:; object-src 'none'; script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https:"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 _TOTAL_VOTES = sum(movie.get("vote_count") or 0 for movie in MOVIES)
 _BAYESIAN_RATING_PRIOR = sum(
     (movie.get("average_rating") or 0) * (movie.get("vote_count") or 0)
@@ -110,10 +131,32 @@ if POSTER_PUBLIC_BASE_URL:
 # since the movie corpus doesn't change while the server is running.
 CATALOG_PATH = Path(__file__).parent / "data" / "imdb_movies.json"
 TFIDF_CACHE_PATH = Path(__file__).parent / "data" / "tfidf_cache.pkl"
-TFIDF_MODEL = load_or_build_tfidf_model(MOVIES, TFIDF_CACHE_PATH, CATALOG_PATH)
-LIKE_TFIDF_MODEL = build_tfidf_model(
+LIKE_TFIDF_CACHE_PATH = Path(__file__).parent / "data" / "tfidf_like_cache.pkl"
+CONCEPT_TABLE = load_or_rebuild_concept_table(MOVIES)
+smart_search_module.CONCEPT_TABLE = CONCEPT_TABLE
+_LOADED_TFIDF_MODEL = load_or_build_tfidf_model(MOVIES, TFIDF_CACHE_PATH, CATALOG_PATH)
+_LOADED_LIKE_TFIDF_MODEL = load_or_build_tfidf_model(
     MOVIES,
+    LIKE_TFIDF_CACHE_PATH,
     document_text_builder=movie_to_similarity_document_text,
+)
+_INDEX_MODELS_VALID = all(
+    model
+    and model.get("_catalog_version") == CATALOG_VERSION
+    and model.get("_index_count") == len(MOVIES)
+    for model in (_LOADED_TFIDF_MODEL, _LOADED_LIKE_TFIDF_MODEL)
+)
+_SEARCH_INDEX_FALLBACK = not (_INDEX_MODELS_VALID and CONCEPT_TABLE.get("enabled"))
+_EMPTY_TFIDF_MODEL = {"idf": {}, "vectors": {}, "norms": {}}
+TFIDF_MODEL = _LOADED_TFIDF_MODEL or _EMPTY_TFIDF_MODEL
+LIKE_TFIDF_MODEL = _LOADED_LIKE_TFIDF_MODEL or _EMPTY_TFIDF_MODEL
+if _SEARCH_INDEX_FALLBACK:
+    app.logger.error("Catalog-derived search indexes are unavailable or stale; using keyword fallback.")
+    TFIDF_MODEL = _EMPTY_TFIDF_MODEL
+    LIKE_TFIDF_MODEL = _EMPTY_TFIDF_MODEL
+INDEX_FALLBACK_NOTICE = (
+    "Search indexes are unavailable or out of date; using plain keyword matching."
+    if _SEARCH_INDEX_FALLBACK else ""
 )
 TITLE_INDEX = {}
 TITLE_EXACT_INDEX = {}
@@ -149,12 +192,33 @@ for movie in MOVIES:
     TITLE_INDEX.setdefault(normalized_title, []).append(movie)
     for alias in title_aliases(movie):
         TITLE_INDEX.setdefault(alias, []).append(movie)
-    for token in set(normalized_title.split()):
+    for token in sorted(set(normalized_title.split())):
         if len(token) >= 4:
             TITLE_TOKEN_INDEX.setdefault(token, []).append(movie)
 
 SERIES_GROUPS = derive_series_groups(MOVIES)
 RISKY_TITLE_VOCABULARY = title_risk_vocabulary(MOVIES)
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    index_version = (
+        _LOADED_TFIDF_MODEL.get("_catalog_version")
+        if _LOADED_TFIDF_MODEL else None
+    )
+    payload = {
+        "status": "ok" if not _SEARCH_INDEX_FALLBACK else "degraded",
+        "catalog_count": len(MOVIES),
+        "index_count": (
+            _LOADED_TFIDF_MODEL.get("_index_count", 0)
+            if _LOADED_TFIDF_MODEL else 0
+        ),
+        "catalog_version": CATALOG_VERSION,
+        "index_version": index_version,
+        "concept_count": len(CONCEPT_TABLE.get("concepts", {})),
+        "keyword_fallback": _SEARCH_INDEX_FALLBACK,
+    }
+    return jsonify(payload), (200 if not _SEARCH_INDEX_FALLBACK else 503)
 
 EXAMPLE_QUERIES = [
     "I want something suspenseful but not horror, preferably a mystery under two hours.",
@@ -389,7 +453,7 @@ def remove_nationality_text(query, code):
     country_name = COUNTRY_LABELS.get(code, "").lower()
     if country_name:
         phrases.append(country_name)
-    for phrase in sorted(phrases, key=len, reverse=True):
+    for phrase in sorted(phrases, key=lambda value: (-len(value), value)):
         normalized = re.sub(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", " ", normalized)
     return " ".join(normalized.split())
 
@@ -450,7 +514,13 @@ def movie_origin_label(movie):
 
 
 def movie_rank_key(movie):
-    return (movie.get("vote_count", 0), movie.get("average_rating") or 0, movie.get("release_year", 0))
+    return (
+        movie.get("vote_count", 0),
+        movie.get("average_rating") or 0,
+        movie.get("release_year", 0),
+        str(movie.get("title", "")).casefold(),
+        str(movie.get("id", "")),
+    )
 
 
 # key -> (label, case-folded award text to look for; empty means any recorded award)
@@ -682,13 +752,9 @@ def movie_matches_release_year(movie, constraint):
     """Apply an explicit release-year request as a hard catalog filter."""
     if not constraint:
         return True
-    year = movie.get("release_year")
-    if year is None:
-        return False
-    return (
-        (constraint["min"] is None or year >= constraint["min"])
-        and (constraint["max"] is None or year <= constraint["max"])
-    )
+    return evaluate_movie_constraints(
+        movie, {"release_year": constraint},
+    )["status"] == "satisfied"
 
 
 GENERIC_TITLE_TOKENS = {
@@ -720,6 +786,7 @@ def find_title_matches(query, movies):
                     key=lambda movie: (
                         -(movie.get("vote_count") or 0),
                         str(movie.get("title", "")).casefold(),
+                        str(movie.get("id", "")),
                     ),
                 )
     if spans:
@@ -787,6 +854,7 @@ def find_title_matches(query, movies):
                     movie.get("release_year") or 0,
                     -(movie.get("vote_count") or 0),
                     str(movie.get("title", "")).casefold(),
+                    str(movie.get("id", "")),
                 ),
             )
             return ordered
@@ -808,6 +876,7 @@ def find_title_matches(query, movies):
                     movie.get("release_year") or 0,
                     -(movie.get("vote_count") or 0),
                     str(movie.get("title", "")).casefold(),
+                    str(movie.get("id", "")),
                 ),
             )
             return ordered
@@ -858,6 +927,7 @@ def find_title_matches(query, movies):
                     movie.get("release_year") or 0,
                     -(movie.get("vote_count") or 0),
                     str(movie.get("title", "")).casefold(),
+                    str(movie.get("id", "")),
                 ),
             )
         base_query = normalized_query
@@ -868,6 +938,7 @@ def find_title_matches(query, movies):
                 movie.get("release_year") or 0,
                 -(movie.get("vote_count") or 0),
                 str(movie.get("title", "")).casefold(),
+                str(movie.get("id", "")),
             ),
         )
         return base_members
@@ -1056,7 +1127,7 @@ def remove_title_text(query, title_matches):
     """Remove a detected title so its words cannot become search preferences."""
     normalized = _title_key(query)
     for movie in title_matches:
-        for title in sorted(title_aliases(movie), key=len, reverse=True):
+        for title in sorted(title_aliases(movie), key=lambda value: (-len(value), value)):
             normalized = re.sub(
                 rf"(?<![a-z0-9]){re.escape(title)}(?![a-z0-9])",
                 " ",
@@ -1187,41 +1258,86 @@ def drop_constraints(preferences, understanding, drops):
                 ]
         elif kind == "negation":
             preferences["unclear_negation"] = False
+        elif kind == "ambiguous":
+            surface, _, category = value.partition(":")
+            removed = [
+                item for item in preferences.get("ambiguous_interpretations", [])
+                if item.get("surface") == surface
+                and (not category or item.get("category") == category)
+            ]
+            preferences["ambiguous_interpretations"] = [
+                item for item in preferences.get("ambiguous_interpretations", [])
+                if item not in removed
+            ]
+            preferences["soft_exclusions"] = [
+                item for item in preferences.get("soft_exclusions", [])
+                if not any(item == f"{match['category']}:{match['tag']}" for match in removed)
+            ]
+            if understanding:
+                understanding["ambiguous_interpretations"] = [
+                    item for item in understanding.get("ambiguous_interpretations", [])
+                    if not any(
+                        item.get("surface") == match["surface"]
+                        and item.get("category") == match["category"]
+                        for match in removed
+                    )
+                ]
+                removed_tags = {item["tag"] for item in removed}
+                understanding["keywords"] = [
+                    item for item in understanding.get("keywords", [])
+                    if item not in removed_tags
+                ]
+                understanding["positive_requirements"] = [
+                    item for item in understanding.get("positive_requirements", [])
+                    if item not in removed_tags
+                ]
+                removed_terms = {
+                    value
+                    for item in removed
+                    for value in (item["surface"], item["tag"])
+                }
+                understanding["negative_requirements"] = [
+                    item for item in understanding.get("negative_requirements", [])
+                    if item not in removed_terms
+                ]
 
 
 def movie_matches_runtime_limits(movie, preferences):
-    """Hard check for explicit min/max runtime; unknown runtime (stored as 0) cannot satisfy a limit."""
+    """True only when available runtime data satisfies an explicit limit."""
     runtime = (preferences or {}).get("runtime") or {}
-    low, high = runtime.get("min"), runtime.get("max")
-    if low is None and high is None:
-        return True
-    length = movie.get("runtime") or 0
-    return length > 0 and (low is None or length >= low) and (high is None or length <= high)
+    return evaluate_runtime_status(movie, runtime) == "satisfied"
 
 
-def movie_matches_audience_certification(movie, preferences):
+def evaluate_audience_certification_status(movie, preferences):
     limits = list((preferences or {}).get("audience_certification_limits", {}).values())
     limits = [limit for limit in limits if limit]
     if not limits:
-        return True
+        return "satisfied"
     certification = next((
         movie.get(key) for key in ("certification", "content_rating", "rating_certificate")
         if movie.get(key)
-    ), "")
+    ), None)
     if not certification:
-        return True
+        return "unverifiable"
     scale = {"G": 0, "PG": 1, "PG-13": 2, "R": 3, "NC-17": 4}
     value = normalize_title(certification).replace(" ", "-").upper()
     value = {"PG13": "PG-13", "NC17": "NC-17"}.get(value, value)
     if value not in scale:
-        return True
-    return all(
-        scale[value] <= scale.get(
-            normalize_title(limit).replace(" ", "-").upper(),
-            scale["NC-17"],
-        )
-        for limit in limits
-    )
+        return "unverifiable"
+    requested = []
+    for limit in limits:
+        normalized = normalize_title(limit).replace(" ", "-").upper()
+        normalized = {"PG13": "PG-13", "NC17": "NC-17"}.get(normalized, normalized)
+        if normalized not in scale:
+            return "unverifiable"
+        requested.append(scale[normalized])
+    return "satisfied" if all(
+        scale[value] <= limit for limit in requested
+    ) else "violated"
+
+
+def movie_matches_audience_certification(movie, preferences):
+    return evaluate_audience_certification_status(movie, preferences) == "satisfied"
 
 
 def describe_tag(tag):
@@ -1285,6 +1401,16 @@ def build_preference_tags(preferences, excluded_count):
             "label": "Audience",
             "value": title_case(intent),
             "key": f"audience:{intent}",
+        })
+    for interpretation in preferences.get("ambiguous_interpretations", []):
+        tags.append({
+            "type": "neutral",
+            "label": "Interpreted",
+            "value": f" '{interpretation['surface']}' as {interpretation['category']}",
+            "key": (
+                f"ambiguous:{interpretation['surface']}:"
+                f"{interpretation['category']}"
+            ),
         })
     if preferences.get("unclear_negation"):
         tags.append({
@@ -1526,10 +1652,13 @@ def index():
     raw_query = request.args.get("q", "")
     query_was_capped = len(raw_query) > MAX_QUERY_LENGTH
     query = raw_query[:MAX_QUERY_LENGTH].strip()
-    query_notice = (
+    exact_search = request.args.get("exact") == "1"
+    query_notices = [
         f"Search was limited to the first {MAX_QUERY_LENGTH} characters."
-        if query_was_capped else ""
-    )
+        if query_was_capped else "",
+        INDEX_FALLBACK_NOTICE,
+    ]
+    query_notice = " ".join(part for part in query_notices if part)
     coverage_notices = []
     trace = getattr(g, "search_trace", None)
     if trace is not None:
@@ -1590,7 +1719,10 @@ def index():
     )
     initial_query = _run_search_stage(
         "parse",
-        lambda: build_structured_query(title_residual),
+        lambda: build_structured_query(
+            title_residual,
+            allow_fuzzy_correction=not exact_search,
+        ),
         None,
         trace,
     ) if query else None
@@ -1616,7 +1748,10 @@ def index():
         )
         query_analysis = _run_search_stage(
             "parse",
-            lambda: build_structured_query(preference_query),
+            lambda: build_structured_query(
+                preference_query,
+                allow_fuzzy_correction=not exact_search,
+            ),
             None,
             trace,
         )
@@ -1641,7 +1776,11 @@ def index():
         )
         query_analysis = _run_search_stage(
             "parse",
-            lambda: build_structured_query(query, preference_query),
+            lambda: build_structured_query(
+                query,
+                preference_query,
+                allow_fuzzy_correction=not exact_search,
+            ),
             None,
             trace,
         ) if query else None
@@ -1653,6 +1792,31 @@ def index():
         filter_conflicts.append("The country in your search overrides the country menu selection.")
     effective_nationality = detected_nationality or selected_nationality
     query_preferences = query_analysis["preferences"] if query_analysis else None
+    selected_ambiguous_exclusions = []
+    if query_preferences and selected_genres:
+        for interpretation in query_preferences.get("ambiguous_interpretations", []):
+            tag = interpretation.get("tag")
+            if (
+                interpretation.get("negated")
+                and interpretation.get("category") == "genre"
+                and tag in selected_genres
+            ):
+                if tag not in query_preferences["excluded_genres"]:
+                    query_preferences["excluded_genres"].append(tag)
+                selected_ambiguous_exclusions.append(interpretation)
+        if selected_ambiguous_exclusions:
+            query_preferences["ambiguous_interpretations"] = [
+                item for item in query_preferences["ambiguous_interpretations"]
+                if item not in selected_ambiguous_exclusions
+            ]
+            removed_soft_tags = {
+                f"{item['category']}:{item['tag']}"
+                for item in selected_ambiguous_exclusions
+            }
+            query_preferences["soft_exclusions"] = [
+                item for item in query_preferences.get("soft_exclusions", [])
+                if item not in removed_soft_tags
+            ]
     if query_preferences and query_preferences.get("audience_certification_limits"):
         if CATALOG_FIELD_COVERAGE["certification"] < max(10, len(MOVIES) * 0.1):
             coverage_notices.append(
@@ -1678,7 +1842,7 @@ def index():
             effective_nationality = ""
     understanding = _run_search_stage(
         "parse",
-        lambda: copy.deepcopy(interpret_query(query)),
+        lambda: copy.deepcopy(interpret_query(query, exact_search=exact_search)),
         None,
         trace,
     ) if query else None
@@ -1688,7 +1852,10 @@ def index():
         raw_understanding = understanding
         understanding = _run_search_stage(
             "parse",
-            lambda: copy.deepcopy(interpret_query(preference_query)),
+            lambda: copy.deepcopy(interpret_query(
+                preference_query,
+                exact_search=exact_search,
+            )),
             None,
             trace,
         )
@@ -1696,6 +1863,14 @@ def index():
             understanding = _minimal_understanding(preference_query, query_analysis)
         if raw_understanding and raw_understanding.get("similar_to"):
             understanding["similar_to"] = raw_understanding["similar_to"]
+    if understanding and selected_ambiguous_exclusions:
+        resolved_surfaces = {
+            item["surface"] for item in selected_ambiguous_exclusions
+        }
+        understanding["ambiguous_interpretations"] = [
+            item for item in understanding.get("ambiguous_interpretations", [])
+            if item.get("surface") not in resolved_surfaces
+        ]
     if like_source_movie and understanding:
         understanding["similar_to"] = like_source_movie["title"]
         understanding["similar_to_movie_id"] = like_source_movie["id"]
@@ -1715,7 +1890,10 @@ def index():
     if embedded_title_intent and query_preferences:
         embedded_query_analysis = _run_search_stage(
             "parse",
-            lambda: build_structured_query(query),
+            lambda: build_structured_query(
+                query,
+                allow_fuzzy_correction=not exact_search,
+            ),
             None,
             trace,
         )
@@ -1732,6 +1910,18 @@ def index():
                     "value": f"{title_case(value)} as a {label}?",
                     "key": f"alternate:{label}:{value}",
                 })
+        for interpretation in embedded_preferences.get("ambiguous_interpretations", []):
+            label = interpretation["category"].replace("_", " ")
+            alternate_interpretations.append({
+                "type": "neutral",
+                "label": "Did you mean",
+                "value": (
+                    f"{title_case(interpretation['surface'])} as a {label}?"
+                ),
+                "key": (
+                    f"alternate:{label}:{interpretation['surface']}"
+                ),
+            })
     bare_year_title = re.fullmatch(r"\s*((?:18|19|20)\d{2})\s*(?:movies?|films?)?\s*", query, re.IGNORECASE)
     if bare_year_title and query_title_matches:
         year_value = bare_year_title.group(1)
@@ -1814,8 +2004,12 @@ def index():
             entity_ids = set(request_ids) if entity_ids is None else entity_ids.intersection(request_ids)
 
     def matching_base_filters(movie):
+        movie_genres = movie.get("genres") or []
         return (
-            (not selected_genres or any(genre in movie["genres"] for genre in selected_genres))
+            (
+                not selected_genres or not movie_genres
+                or any(genre in movie_genres for genre in selected_genres)
+            )
             and (not effective_nationality or str(movie.get("id")) in (country_ids or set()))
             and (not selected_awards or str(movie.get("id")) in (award_ids or set()))
             and (entity_ids is None or str(movie.get("id")) in entity_ids)
@@ -1825,29 +2019,49 @@ def index():
     if trace is not None:
         trace.count("base-filtered", len(base_movies))
 
+    filter_status_by_movie_id = {}
+
     def search_pool():
         pool = []
+        filter_status_by_movie_id.clear()
         for movie in base_movies:
             active_genres = list(dict.fromkeys([*selected_genres, *query_genres]))
             active_genres = [
                 genre for genre in active_genres
                 if genre not in (query_preferences.get("excluded_genres", []) if query_preferences else [])
             ]
-            if active_genres and not any(genre in movie["genres"] for genre in active_genres):
+            constraints = evaluate_movie_constraints(
+                movie, query_preferences, active_genres,
+            )
+            if constraints["status"] == "violated":
                 continue
-            if not movie_matches_runtime_limits(movie, query_preferences):
+            audience_status = evaluate_audience_certification_status(
+                movie, query_preferences,
+            )
+            if audience_status == "violated":
                 continue
-            if not movie_matches_audience_certification(movie, query_preferences):
-                continue
-            if query_preferences and is_excluded(movie, query_preferences):
-                continue
+            checks = list(constraints["checks"])
+            if query_preferences and query_preferences.get("audience_certification_limits"):
+                checks.append({
+                    "constraint": "certification",
+                    "status": audience_status,
+                })
+            if llm_min_rating is not None:
+                rating = movie.get("average_rating")
+                rating_status = (
+                    "unverifiable" if rating is None
+                    else "satisfied" if rating >= llm_min_rating
+                    else "violated"
+                )
+                if rating_status == "violated":
+                    continue
+                checks.append({
+                    "constraint": "rating",
+                    "status": rating_status,
+                })
             if query_preferences and query_preferences.get("cast_gender") and not evaluate_cast_constraint(movie, query_preferences["cast_gender"]):
                 continue
-            if not movie_matches_release_year(movie, year_constraint):
-                continue
-            rating = movie.get("average_rating")
-            if llm_min_rating is not None and (rating is None or rating < llm_min_rating):
-                continue
+            filter_status_by_movie_id[str(movie.get("id"))] = checks
             pool.append(movie)
         return pool
 
@@ -1856,6 +2070,7 @@ def index():
         trace.count("filtered", len(filtered_movies))
     search_notice = " ".join(part for part in (query_notice, *coverage_notices) if part)
     normalization_notice = ""
+    exact_search_url = ""
 
     context = {
         "query": query,
@@ -2120,6 +2335,43 @@ def index():
                     )
             if trace is not None:
                 trace.count("retrieved", len(candidates))
+            corrections = dict(
+                query_preferences.get("fuzzy_corrections", {})
+                if query_preferences else {}
+            )
+            if understanding:
+                corrections.update(understanding.get("fuzzy_corrections", {}))
+            for item in candidates:
+                corrections.update(item.get("corrections", {}))
+            corrected_query = query
+            for original, corrected in sorted(
+                corrections.items(),
+                key=lambda item: len(item[0]),
+                reverse=True,
+            ):
+                corrected_query = re.sub(
+                    rf"(?<!\w){re.escape(original)}(?!\w)",
+                    corrected,
+                    corrected_query,
+                    flags=re.IGNORECASE,
+                )
+            if corrected_query != query:
+                correction_notice = (
+                    f'Showing results for "{corrected_query}" '
+                    f'(you typed "{query}").'
+                )
+                search_notice = " ".join(
+                    part for part in (search_notice, correction_notice) if part
+                )
+                exact_search_url = url_for(
+                    "index",
+                    q=query,
+                    exact="1",
+                    per_page=per_page,
+                    genre=selected_genres,
+                    nationality=selected_nationality,
+                    awards=selected_awards,
+                )
             normalized_variant = next((
                 item.get("normalized_query") for item in candidates
                 if item.get("normalized_query")
@@ -2171,6 +2423,21 @@ def index():
             _unverified_candidates(candidates),
             trace,
         )
+        for candidate in candidates:
+            checks = filter_status_by_movie_id.get(
+                str(candidate.get("movie", {}).get("id")), [],
+            )
+            unverified_constraints = [
+                check["constraint"] for check in checks
+                if check["status"] == "unverifiable"
+            ]
+            candidate["filter_constraint_checks"] = checks
+            candidate["filter_unverified"] = bool(unverified_constraints)
+            if unverified_constraints:
+                candidate["unverifiable"] = list(dict.fromkeys([
+                    *candidate.get("unverifiable", []),
+                    *unverified_constraints,
+                ]))
         if trace is not None:
             trace.count("verified", len(candidates))
         candidate_movies = [item["movie"] for item in candidates]
@@ -2232,6 +2499,10 @@ def index():
             entry["satisfied"] = candidate.get("satisfied", [])
             entry["unsatisfied"] = candidate.get("unsatisfied", [])
             entry["unverifiable"] = candidate.get("unverifiable", [])
+            entry["filter_unverified"] = candidate.get("filter_unverified", False)
+            entry["filter_constraint_checks"] = candidate.get(
+                "filter_constraint_checks", [],
+            )
             entry["confidence"] = candidate.get("confidence", 0)
             entry["verification_fallback"] = candidate.get("verification_fallback", False)
             candidate["percent"] = entry["percent"]
@@ -2327,6 +2598,7 @@ def index():
                 title_order.get(str(entry["movie"]["id"]), len(title_order)),
                 -(entry["movie"].get("vote_count") or 0),
                 str(entry["movie"].get("title", "")).casefold(),
+                str(entry["movie"].get("id", "")),
             ))
         elif understanding.get("similar_to"):
             if exact_results:
@@ -2362,6 +2634,11 @@ def index():
             f'{context["result_tier_counts"][tier]} {tier}'
             for tier in ("exact", "close", "related")
         )
+        unverified_count = sum(
+            bool(entry.get("filter_unverified")) for entry in all_results
+        )
+        if unverified_count:
+            context["result_count_label"] += f" — {unverified_count} unverified"
         if selected_genres:
             all_count = sum(
                 1 for entry in all_results
@@ -2375,8 +2652,13 @@ def index():
             context["result_count_label"] += " — " + genre_count_label
         if query_analysis["ranking_intent"] and not title_matches and not understanding.get("similar_to"):
             all_results.sort(key=lambda entry: (
+                str(entry["movie"].get("title", "")).casefold(),
+                str(entry["movie"].get("id", "")),
+            ))
+            all_results.sort(key=lambda entry: (
                 ranking_key(entry, query_analysis["ranking_intent"]), entry["final_score"]
             ), reverse=True)
+        all_results.sort(key=lambda entry: bool(entry.get("filter_unverified")))
         total_pages = max(1, math.ceil(len(all_results) / per_page))
         page_number = min(page_number, total_pages)
         start = (page_number - 1) * per_page
@@ -2448,7 +2730,9 @@ def index():
                 "percent": entry["percent"],
                 "breakdown": entry["breakdown"],
                 "poster_exists": poster_exists(movie),
-                "genres_display": ", ".join(title_case(g) for g in movie["genres"]),
+                "genres_display": ", ".join(
+                    title_case(g) for g in (movie.get("genres") or [])
+                ),
                 "reasons": reasons,
                 "match_reason": entry["match_reason"],
                 "match_level": entry["match_level"],
@@ -2460,8 +2744,11 @@ def index():
                 }[entry["match_tier"]],
                 "genre_match_count": len(set(selected_genres).intersection(set(movie.get("genres", [])))) ,
                 "show_unverified_badge": (
-                    False if str(movie["id"]) in title_match_ids and entry["match_tier"] == "exact"
-                    else bool(entry["unverifiable"] or entry["verification_fallback"])
+                    bool(
+                        entry.get("filter_unverified")
+                        or entry["unverifiable"]
+                        or entry["verification_fallback"]
+                    )
                 ),
                 "cast_status": cast_status,
                 "cast_badge": cast_status["badge"],
@@ -2539,6 +2826,7 @@ def index():
                 trace,
             ),
             "search_notice": search_notice,
+            "exact_search_url": exact_search_url,
             "assistant_message": context["assistant_message"],
             "assistant_state": context["assistant_state"],
         })
@@ -2720,7 +3008,7 @@ def suggest():
             kind = "series" if is_series else "title"
             series_level = 1 if is_series and (normalized_title.startswith(typed) or typed in normalized_title) else level
             suggestions.append((series_level, position + 1, title, kind))
-    suggestions.sort(key=lambda item: (item[0], item[1]))
+    suggestions.sort(key=lambda item: (item[0], item[1], item[2].casefold(), item[2], item[3]))
     return jsonify([{"text": text, "kind": kind} for _, _, text, kind in suggestions[:8]])
 
 

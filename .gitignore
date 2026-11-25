@@ -9,6 +9,8 @@ instance/
 data/imdb/
 data/imdb_movies.json
 data/tfidf_cache.pkl
+data/tfidf_like_cache.pkl
+data/movie_embeddings.json.gz
 data/imdb_movies.tmdb_progress.json
 data/movie_public_progress.json
 data/search_quality.jsonl*

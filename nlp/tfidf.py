@@ -14,18 +14,22 @@ pretrained model or embedding is used anywhere in this file.
 -----------------------------------------------------------------------
 """
 
-import hashlib
 import logging
 import math
+import os
 import pickle
 import re
+import time
 from pathlib import Path
+from data.catalog_version import catalog_version
 from .tokenize import remove_stopwords
 from .similarity import vector_norm
 
 WORD_RE = re.compile(r"[^a-z0-9\s-]")
 TOKENIZER_VERSION = 2
 _LOGGER = logging.getLogger(__name__)
+MAX_LOCAL_REBUILD_RECORDS = 5000
+MAX_LOCAL_REBUILD_SECONDS = 3.0
 
 
 def simple_word_tokens(text):
@@ -105,7 +109,7 @@ def build_tfidf_model(movies, document_text_builder=movie_to_document_text):
     # Document frequency: how many documents contain each term at least once.
     df = {}
     for doc in documents:
-        for term in set(doc["tokens"]):
+        for term in sorted(set(doc["tokens"])):
             df[term] = df.get(term, 0) + 1
 
     # Smoothed IDF so a term appearing in every document doesn't hit zero.
@@ -121,35 +125,44 @@ def build_tfidf_model(movies, document_text_builder=movie_to_document_text):
     return {"idf": idf, "vectors": vectors, "norms": norms}
 
 
-def load_or_build_tfidf_model(movies, cache_path, source_path=None):
+def load_or_build_tfidf_model(
+    movies,
+    cache_path,
+    source_path=None,
+    document_text_builder=movie_to_document_text,
+):
     """Load a cached model when the catalog has not changed."""
     cache_path = Path(cache_path)
     source_stamp = Path(source_path).stat().st_mtime_ns if source_path and Path(source_path).exists() else None
-    content_digest = hashlib.sha256()
-    for movie in movies:
-        document = movie_to_document_text(movie).encode("utf-8")
-        content_digest.update(len(document).to_bytes(8, "big"))
-        content_digest.update(document)
+    version = catalog_version(movies)
     fingerprint = (
         TOKENIZER_VERSION,
-        len(movies),
+        document_text_builder.__module__,
+        document_text_builder.__qualname__,
         source_stamp,
-        movies[0].get("id") if movies else None,
-        movies[-1].get("id") if movies else None,
-        content_digest.hexdigest(),
+        version["record_count"],
+        version["content_hash"],
     )
 
     if cache_path.exists():
         try:
             with cache_path.open("rb") as stream:
                 cached = pickle.load(stream)
-            if isinstance(cached, dict) and cached.get("fingerprint") == fingerprint:
+            if (
+                isinstance(cached, dict)
+                and cached.get("fingerprint") == fingerprint
+                and cached.get("catalog_version") == version
+                and cached.get("index_count") == version["record_count"]
+            ):
                 cached_model = cached.get("model")
                 if (
                     isinstance(cached_model, dict)
                     and isinstance(cached_model.get("idf"), dict)
                     and isinstance(cached_model.get("vectors"), dict)
                     and isinstance(cached_model.get("norms"), dict)
+                    and len(cached_model["vectors"]) == version["record_count"]
+                    and cached_model.get("_catalog_version") == version
+                    and cached_model.get("_index_count") == version["record_count"]
                 ):
                     return cached_model
                 _LOGGER.warning("TF-IDF cache has an invalid model shape; rebuilding it locally.")
@@ -158,12 +171,37 @@ def load_or_build_tfidf_model(movies, cache_path, source_path=None):
         except (OSError, EOFError, pickle.PickleError, KeyError, ValueError) as error:
             _LOGGER.warning("TF-IDF cache cannot be loaded; rebuilding it locally: %s", error)
 
-    model = build_tfidf_model(movies)
-    temporary_path = cache_path.with_suffix(".tmp")
+    if len(movies) > MAX_LOCAL_REBUILD_RECORDS:
+        _LOGGER.error(
+            "TF-IDF index is stale or missing for %s records; local rebuild limit is %s.",
+            len(movies),
+            MAX_LOCAL_REBUILD_RECORDS,
+        )
+        return None
+
+    started = time.perf_counter()
+    model = build_tfidf_model(movies, document_text_builder=document_text_builder)
+    elapsed = time.perf_counter() - started
+    if elapsed > MAX_LOCAL_REBUILD_SECONDS:
+        _LOGGER.error(
+            "TF-IDF rebuild took %.3fs, over the %.1fs startup budget; using keyword fallback.",
+            elapsed,
+            MAX_LOCAL_REBUILD_SECONDS,
+        )
+        return None
+
+    model["_catalog_version"] = version
+    model["_index_count"] = len(model["vectors"])
+    temporary_path = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.tmp")
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         with temporary_path.open("wb") as stream:
-            pickle.dump({"fingerprint": fingerprint, "model": model}, stream, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump({
+                "fingerprint": fingerprint,
+                "catalog_version": version,
+                "index_count": len(model["vectors"]),
+                "model": model,
+            }, stream, protocol=pickle.HIGHEST_PROTOCOL)
         temporary_path.replace(cache_path)
     except OSError as error:
         _LOGGER.warning("TF-IDF cache could not be saved; using the in-memory model: %s", error)

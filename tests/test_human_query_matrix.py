@@ -110,7 +110,7 @@ class HumanQueryMatrixTests(unittest.TestCase):
         cases = [
             ("best pinoy horror movies", "PH", "horror"),
             ("movies from the 90s", "", None),
-            ("walang horror", "", None),
+            ("walang horror movies", "", None),
         ]
         for query, country, genre in cases:
             parsed = build_structured_query(query)
@@ -132,7 +132,7 @@ class HumanQueryMatrixTests(unittest.TestCase):
                         continue
                     self.assertTrue(ranked["results"])
                     self.assertTrue(all(genre in entry["movie"]["genres"] for entry in ranked["results"]))
-                if query == "walang horror":
+                if query == "walang horror movies":
                     self.assertTrue(all("horror" not in entry["movie"]["genres"] for entry in ranked["results"]))
 
 

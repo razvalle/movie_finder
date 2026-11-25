@@ -202,10 +202,17 @@ def generate_cases():
             queries.append(f"{genre}-free")
         for query in queries:
             preferences = extract_preferences(query)
+            negated_ambiguity = any(
+                item.get("negated") and item.get("tag") == genre
+                for item in preferences.get("ambiguous_interpretations", [])
+            )
+            soft_exclusion = f"genre:{genre}" in preferences.get("soft_exclusions", [])
             cases.append(_case(
                 "negation_scope",
                 query,
-                genre in preferences["excluded_genres"],
+                genre in preferences["excluded_genres"]
+                or soft_exclusion
+                or negated_ambiguity,
             ))
         for degree in query_rules["soft_degree_words"]:
             for cue in ("not", "nothing"):

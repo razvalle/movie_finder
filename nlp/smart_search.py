@@ -23,12 +23,14 @@ from data.synonyms import (
     THEME_SYNONYMS,
 )
 from data.movies import MOVIES as _STARTUP_MOVIES
+from data.catalog_version import catalog_version
 from .concepts import (
     MAX_EXPANSION_WEIGHT,
     expand_query,
     load_concept_table,
     normalize_phrase,
 )
+from .fuzzy import correct_unknown_token
 from .normalize import normalize_text
 from .query import EXPLICIT_SYNTAX_TOKENS, build_structured_query
 from .runtime import WORD_NUMBERS
@@ -52,6 +54,11 @@ _REDIS_CLIENT = None
 _REDIS_URL = None
 _REDIS_LOCK = threading.Lock()
 _LOGGER = logging.getLogger(__name__)
+_STARTUP_CATALOG_VERSION = catalog_version(_STARTUP_MOVIES)
+_STARTUP_CATALOG_KEY = (
+    _STARTUP_CATALOG_VERSION["record_count"],
+    _STARTUP_CATALOG_VERSION["content_hash"],
+)
 CONCEPT_TABLE = load_concept_table(_STARTUP_MOVIES)
 
 _CACHE = OrderedDict()
@@ -316,13 +323,24 @@ def _sanitize_filters(value):
     }
 
 
-def local_understanding(raw_query):
+def local_understanding(raw_query, exact_search=False):
     """Interpret a query with the project's deterministic NLP rules."""
-    structured = build_structured_query(raw_query)
+    structured = build_structured_query(
+        raw_query,
+        allow_fuzzy_correction=not exact_search,
+    )
     preferences = structured["preferences"]
-    keywords = list(preferences["free_text_keywords"])
+    required_terms = list(preferences["free_text_keywords"])
+    keywords = list(required_terms)
+    keywords.extend(
+        item["tag"] for item in preferences.get("ambiguous_interpretations", [])
+        if not item.get("negated")
+    )
     runtime = preferences["runtime"]
     if any(runtime.get(key) is not None for key in ("min", "max", "target")):
+        required_terms = [
+            term for term in required_terms if term not in WORD_NUMBERS
+        ]
         keywords = [keyword for keyword in keywords if keyword not in WORD_NUMBERS]
     no_twist_ending = bool(re.search(
         r"\b(?:not|no|without|avoid|avoiding)\s+(?:a\s+|any\s+)?twist\b|\bending\s+(?:is\s+)?not\s+(?:a\s+)?twist\b",
@@ -335,7 +353,6 @@ def local_understanding(raw_query):
     black_and_white_request = bool(re.search(r"\bblack\s+and\s+white\b|\bblack-and-white\b", normalize_text(raw_query)))
     concepts = []
     normalized = normalize_text(raw_query)
-    required_terms = list(keywords)
     road_trip_request = bool(re.search(r"\broad(?:\s+|-)?trip\b", normalized))
     for item in LOCAL_CONCEPTS:
         if re.search(item["pattern"], normalized, re.IGNORECASE):
@@ -378,6 +395,11 @@ def local_understanding(raw_query):
             + preferences.get("excluded_content_descriptors", [])
             + preferences.get("excluded_themes", [])
             + preferences.get("excluded_keywords", [])
+            + [
+                value for item in preferences.get("ambiguous_interpretations", [])
+                if item.get("negated")
+                for value in (item["surface"], item["tag"])
+            ]
             + (["twist ending"] if no_twist_ending else [])
         )),
         "hard_constraints": list(dict.fromkeys(
@@ -416,16 +438,22 @@ def local_understanding(raw_query):
             },
         },
         "rule_based": True,
+        "exact_search": bool(exact_search),
+        "fuzzy_corrections": preferences.get("fuzzy_corrections", {}),
+        "ambiguous_interpretations": preferences.get("ambiguous_interpretations", []),
     }
 
 
-def interpret_query(raw_query):
+def interpret_query(raw_query, exact_search=False):
     raw_query = raw_query[:MAX_QUERY_LENGTH]
-    cache_key = ("understand", raw_query.casefold())
+    normalized_query = normalize_text(raw_query).casefold()
+    cache_key = (
+        "understand", normalized_query, bool(exact_search), _STARTUP_CATALOG_KEY,
+    )
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-    result = local_understanding(raw_query)
+    result = local_understanding(raw_query, exact_search=exact_search)
     _cache_set(cache_key, result)
     return result
 
@@ -495,8 +523,8 @@ def _make_search_vocabulary(movies):
         GENRE_SYNONYMS, MOOD_SYNONYMS, THEME_SYNONYMS,
         CONTENT_DESCRIPTOR_SYNONYMS,
     ):
-        for canonical, forms in table.items():
-            for phrase in {canonical, *forms}:
+        for canonical, forms in sorted(table.items()):
+            for phrase in sorted({canonical, *forms}):
                 tokens = _text_tokens(phrase)
                 word_support.update(tokens)
                 if 2 <= len(tokens) <= 4:
@@ -532,12 +560,22 @@ def _normalize_query_concepts(raw_query, understanding, movies):
             and not re.fullmatch(r"(?:\d{2,4})s?", token)
         ]
     if not source_terms:
-        return {"concepts": [], "terms": [], "variant": "", "variant_applied": False}
+        return {
+            "concepts": [], "terms": [], "variant": "",
+            "variant_applied": False, "corrections": {},
+        }
     index = _get_bm25_index(movies)
     word_support = index["word_support"]
     compound_support = index["compound_support"]
     terms = []
     variant_applied = False
+    corrections = {}
+    protected_tokens = set(STOP_WORDS) | set(EXPLICIT_SYNTAX_TOKENS) | set(WORD_NUMBERS)
+    known_tokens = _get_bm25_index(_STARTUP_MOVIES)["word_support"]
+    document_frequency = {
+        candidate: len(index["postings"].get(candidate, ()))
+        for candidate in word_support
+    }
     for term_index, term in enumerate(source_terms):
         normalized_term = normalize_text(term)
         if "-" in normalized_term:
@@ -549,20 +587,14 @@ def _normalize_query_concepts(raw_query, understanding, movies):
                         terms.extend(split)
                         variant_applied = True
                 else:
-                        closest = max(
+                        closest = None if understanding.get("exact_search") else correct_unknown_token(
+                            piece,
                             word_support,
-                            key=lambda candidate: (
-                                SequenceMatcher(None, piece, candidate).ratio()
-                                if abs(len(piece) - len(candidate)) <= 2 else 0.0,
-                                candidate,
-                            ),
-                            default=piece,
+                            document_frequency,
+                            protected_tokens,
+                            known_tokens=known_tokens,
                         )
-                        if (
-                            len(piece) >= 4
-                            and len(closest) >= 4
-                            and SequenceMatcher(None, piece, closest).ratio() >= 0.78
-                        ):
+                        if closest:
                             neighboring_terms = []
                             if term_index > 0:
                                 neighboring_terms.extend(_text_tokens(source_terms[term_index - 1]))
@@ -576,6 +608,7 @@ def _normalize_query_concepts(raw_query, understanding, movies):
                             if closest not in STOP_WORDS or phrase_supported:
                                 terms.append(closest)
                                 variant_applied = True
+                                corrections[piece] = closest
                         elif required and closest not in STOP_WORDS:
                             terms.append(piece)
             elif compound_support.get(piece, 0):
@@ -616,8 +649,9 @@ def _normalize_query_concepts(raw_query, understanding, movies):
     return {
         "concepts": concepts,
         "terms": normalized_terms,
-        "variant": normalized if variant_applied else "",
+        "variant": normalized if variant_applied and not corrections else "",
         "variant_applied": variant_applied,
+        "corrections": corrections,
     }
 
 
@@ -784,16 +818,20 @@ def _make_bm25_index(movies):
 
 
 def _get_bm25_index(movies):
-    key = id(movies)
+    version = (
+        _STARTUP_CATALOG_VERSION
+        if movies is _STARTUP_MOVIES else catalog_version(movies)
+    )
+    key = (version["record_count"], version["content_hash"])
     with _BM25_LOCK:
         cached = _BM25_CACHE.get(key)
-        if cached is not None and cached[0] is movies:
-            return cached[1]
+        if cached is not None:
+            return cached
         index = _make_bm25_index(movies)
         if cached is None:
             if len(_BM25_CACHE) >= 2:
                 _BM25_CACHE.pop(next(iter(_BM25_CACHE)))
-        _BM25_CACHE[key] = (movies, index)
+        _BM25_CACHE[key] = index
         return index
 
 
@@ -859,55 +897,55 @@ def _raw_query_terms_from_understanding(raw_query, understanding):
     ))
 
 
-def _fuzzy_terms(terms, vocabulary):
+def _fuzzy_terms(
+    terms,
+    vocabulary,
+    document_frequency=None,
+    protected_tokens=(),
+    allow_correction=True,
+):
     expanded = set(terms)
-    vocabulary = list(vocabulary)
-    vocabulary_set = set(vocabulary)
-    for term in set(terms):
-        if (
-            len(term) < 4
-            or term in vocabulary_set
-            or term in STOP_WORDS
-            or term in EXPLICIT_SYNTAX_TOKENS
-            or re.fullmatch(r"\d+(?:\.\d+)?|\d{2,4}s?", term)
-        ):
-            continue
-        closest = None
-        closest_ratio = 0.0
-        for candidate in vocabulary:
-            if abs(len(term) - len(candidate)) > 2:
-                continue
-            ratio = SequenceMatcher(None, term, candidate).ratio()
-            if ratio > closest_ratio:
-                closest, closest_ratio = candidate, ratio
-        if closest and closest_ratio >= 0.78:
-            expanded.add(closest)
+    if not allow_correction:
+        return expanded
+    mapping = _fuzzy_term_map(
+        terms,
+        vocabulary,
+        document_frequency=document_frequency,
+        protected_tokens=protected_tokens,
+    )
+    expanded.update(
+        corrected for original, corrected in mapping.items()
+        if corrected != original
+    )
     return expanded
 
 
-def _fuzzy_term_map(terms, vocabulary):
-    vocabulary = list(vocabulary)
-    vocabulary_set = set(vocabulary)
+def _fuzzy_term_map(
+    terms,
+    vocabulary,
+    document_frequency=None,
+    protected_tokens=(),
+    allow_correction=True,
+    known_tokens=(),
+):
+    vocabulary = set(vocabulary)
+    protected = (
+        set(STOP_WORDS) | set(EXPLICIT_SYNTAX_TOKENS) | set(WORD_NUMBERS)
+        | set(protected_tokens)
+    )
     mapping = {}
     for term in terms:
-        if (
-            term in vocabulary_set
-            or len(term) < 4
-            or term in STOP_WORDS
-            or term in EXPLICIT_SYNTAX_TOKENS
-            or re.fullmatch(r"\d+(?:\.\d+)?|\d{2,4}s?", term)
-        ):
-            mapping[term] = term
-            continue
-        closest = None
-        closest_ratio = 0.0
-        for candidate in vocabulary:
-            if abs(len(term) - len(candidate)) > 2:
-                continue
-            ratio = SequenceMatcher(None, term, candidate).ratio()
-            if ratio > closest_ratio:
-                closest, closest_ratio = candidate, ratio
-        mapping[term] = closest if closest and closest_ratio >= 0.78 else term
+        corrected = (
+            correct_unknown_token(
+                term,
+                vocabulary,
+                document_frequency=document_frequency,
+                protected_tokens=protected,
+                known_tokens=known_tokens,
+            )
+            if allow_correction else None
+        )
+        mapping[term] = corrected or term
     return mapping
 
 
@@ -997,7 +1035,11 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
                 )
                 if score > 0:
                     similar.append((score, position, movie))
-            similar.sort(key=lambda item: (-item[0], item[1], str(item[2].get("id"))))
+            similar.sort(key=lambda item: (
+                -item[0],
+                str(item[2].get("title", "")).casefold(),
+                str(item[2].get("id", "")),
+            ))
             return [{
                 "movie": movie,
                 "search_score": score / similar[0][0] * 100,
@@ -1009,6 +1051,7 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
                 },
                 "normalized_terms": [],
                 "normalized_query": "",
+                "corrections": understanding.get("fuzzy_corrections", {}),
                 "evidence_strength": score / similar[0][0],
                 "fallback_only": False,
             } for score, _, movie in similar[:limit]]
@@ -1070,17 +1113,33 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
         and set(raw_terms) <= structured_terms
     ):
         raw_terms = []
+    lexical_index = _get_bm25_index(movies)
+    fuzzy_mapping = _fuzzy_term_map(
+        direct_terms,
+        lexical_index["word_support"],
+        document_frequency={
+            term: len(lexical_index["postings"].get(term, ()))
+            for term in lexical_index["word_support"]
+        },
+        allow_correction=not understanding.get("exact_search"),
+        known_tokens=_get_bm25_index(_STARTUP_MOVIES)["word_support"],
+    )
+    corrections = dict(understanding.get("fuzzy_corrections", {}))
+    corrections.update(normalization.get("corrections", {}))
+    corrections.update({
+        term: corrected for term, corrected in fuzzy_mapping.items()
+        if corrected != term
+    })
     lexical_scores = {}
     if len(movies) <= 5000:
-        lexical_index = _get_bm25_index(movies)
-        direct_query_terms = sorted(_fuzzy_terms(direct_terms, lexical_index["vocabulary"]))
+        direct_query_terms = sorted(set(fuzzy_mapping.values()))
         weighted_query_terms = {term: 1.0 for term in direct_query_terms}
         for term, weight in sorted(expansion_weights.items()):
             if term in lexical_index["vocabulary"]:
                 weighted_query_terms[term] = max(weighted_query_terms.get(term, 0.0), weight)
         lexical_scores = _bm25_scores(weighted_query_terms, lexical_index, weighted_query_terms)
     elif tfidf_model:
-        direct_query_terms = sorted(_fuzzy_terms(direct_terms, tfidf_model["idf"].keys()))
+        direct_query_terms = sorted(set(fuzzy_mapping.values()))
         query_vector = vectorize_query(direct_query_terms, tfidf_model["idf"])
         for term, weight in sorted(expansion_weights.items()):
             expanded_vector = vectorize_query([term], tfidf_model["idf"])
@@ -1199,6 +1258,7 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
             "query_evidence": evidence,
             "normalized_terms": normalization["terms"],
             "normalized_query": normalization["variant"],
+            "corrections": corrections,
             "evidence_strength": evidence.get("strength", 0.0),
             "fallback_only": fallback_only,
         })
@@ -1219,15 +1279,26 @@ def retrieve_plain_candidates(raw_query, understanding, movies, tfidf_model=None
             if term not in STOP_WORDS and term not in EXPLICIT_SYNTAX_TOKENS and len(term) > 1
         ]
     scores = {}
+    fuzzy_mapping = {term: term for term in terms}
     if terms:
         index = _get_bm25_index(movies)
-        direct_terms = sorted(_fuzzy_terms(terms, index["vocabulary"]))
+        fuzzy_mapping = _fuzzy_term_map(
+            terms,
+            index["word_support"],
+            document_frequency={
+                term: len(index["postings"].get(term, ()))
+                for term in index["word_support"]
+            },
+            allow_correction=not direct_understanding.get("exact_search"),
+            known_tokens=_get_bm25_index(_STARTUP_MOVIES)["word_support"],
+        )
+        direct_terms = sorted(set(fuzzy_mapping.values()))
         scores = _bm25_scores(direct_terms, index)
     title_scores = _title_scores(direct_understanding, movies)
     ranked_positions = set(scores) | set(title_scores)
     method = "plain-bm25"
     if not ranked_positions and tfidf_model and terms:
-        fuzzy_terms = sorted(_fuzzy_terms(terms, tfidf_model.get("idf", {}).keys()))
+        fuzzy_terms = sorted(set(fuzzy_mapping.values()))
         query_vector = vectorize_query(fuzzy_terms, tfidf_model["idf"])
         query_norm = vector_norm(query_vector) if query_vector else 0.0
         scores = {
@@ -1269,6 +1340,10 @@ def retrieve_plain_candidates(raw_query, understanding, movies, tfidf_model=None
         "relevance_score": scores.get(position),
         "normalized_terms": terms,
         "normalized_query": "",
+        "corrections": {
+            term: corrected for term, corrected in fuzzy_mapping.items()
+            if corrected != term
+        },
         "evidence_strength": 0.0,
         "fallback_only": True,
         "fallback_method": method,
@@ -1504,9 +1579,10 @@ def rerank_candidates(raw_query, candidates, understanding=None, on_error=None):
         understanding = {}
     cache_key = (
         "verify",
-        raw_query.casefold(),
+        normalize_text(raw_query).casefold(),
         json.dumps(understanding, sort_keys=True, separators=(",", ":"), default=str),
         tuple(str(item["movie"]["id"]) for item in candidates),
+        _STARTUP_CATALOG_KEY,
     )
     cached = _cache_get(cache_key)
     if cached is not None:

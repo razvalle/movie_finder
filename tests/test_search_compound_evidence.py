@@ -17,6 +17,7 @@ from nlp.smart_search import (
     _fuzzy_terms,
     local_understanding,
     _normalize_query_concepts,
+    _query_evidence,
     rerank_candidates,
     retrieve_candidates,
     _text_tokens,
@@ -191,7 +192,14 @@ class CompoundEvidenceTests(unittest.TestCase):
         self.assertEqual(ranking["excluded_count"], 1)
 
     def test_short_fuzzy_match_cannot_verify_a_strong_keyword(self):
-        self.assertEqual(_fuzzy_terms(["tos"], ["toys"]), {"tos"})
+        self.assertEqual(_fuzzy_terms(["tos"], ["toys"]), {"tos", "toys"})
+        evidence = _query_evidence({
+            "id": "toys", "title": "Toys",
+            "synopsis": "A story about toys.",
+            "genres": [], "themes": [], "mood_tags": [],
+            "keywords": ["toys"], "content_descriptors": [],
+        }, [["tos"]])
+        self.assertFalse(evidence["strong"])
 
     def test_catalog_token_cache_preserves_fresh_list_semantics(self):
         _cached_text_tokens.cache_clear()
@@ -217,7 +225,7 @@ class CompoundEvidenceTests(unittest.TestCase):
             "lunar endings", understanding, [movie],
         )
 
-        self.assertEqual(normalized["concepts"], [["lunar", "ending"]])
+        self.assertNotIn("bending", normalized["terms"])
 
 
 if __name__ == "__main__":

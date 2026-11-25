@@ -345,9 +345,15 @@ def derive_series_groups(movies):
                 rule = "sequel-marker"
                 break
         result.append({
-            "base": sorted({normalize_title(member.get("title", "")) for member in members}, key=len)[0],
+            "base": sorted(
+                {normalize_title(member.get("title", "")) for member in members},
+                key=lambda title: (len(title), title),
+            )[0],
             "rule": rule,
-            "titles": sorted({member.get("title", "") for member in members}, key=str.casefold),
+            "titles": sorted(
+                {member.get("title", "") for member in members},
+                key=lambda title: (title.casefold(), title),
+            ),
         })
     result.sort(key=lambda group: tuple(group["titles"]))
     return result
