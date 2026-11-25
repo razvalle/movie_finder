@@ -70,6 +70,18 @@ def movie_to_document_text(movie):
     ])
 
 
+def movie_to_similarity_document_text(movie):
+    """Fields used for title-to-title similarity, excluding names and mood labels."""
+    values = [
+        movie.get("synopsis", ""),
+        movie.get("overview", ""),
+        *(movie.get("genres") or []),
+        *(movie.get("themes") or []),
+        *(movie.get("keywords") or []),
+    ]
+    return " ".join(str(value) for value in values if value)
+
+
 def compute_tf(tokens):
     """Term frequency map for a token list: count / total_tokens."""
     tf = {}
@@ -79,13 +91,13 @@ def compute_tf(tokens):
     return {term: count / n for term, count in tf.items()}
 
 
-def build_tfidf_model(movies):
+def build_tfidf_model(movies, document_text_builder=movie_to_document_text):
     """
     Builds the full TF-IDF model for a movie dataset.
     Returns {"idf": {term: weight}, "vectors": {movie_id: {term: tfidf}}}
     """
     documents = [
-        {"id": m["id"], "tokens": simple_word_tokens(movie_to_document_text(m))}
+        {"id": m["id"], "tokens": simple_word_tokens(document_text_builder(m))}
         for m in movies
     ]
     n_docs = len(documents)

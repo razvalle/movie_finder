@@ -26,10 +26,11 @@ from .tokenize import STOPWORDS, tokenize, build_ngrams, remove_stopwords
 from .negation import (
     NEGATION_CUES,
     find_negation_scopes,
+    find_soft_negation_scopes,
     is_retroactively_negated,
     is_within_negation_scope,
 )
-from .runtime import extract_runtime_constraint
+from .runtime import extract_runtime_constraint, extract_vague_runtime_constraint
 from .release_year import extract_release_year_constraint
 from data.synonyms import build_reverse_index
 
@@ -67,11 +68,13 @@ def extract_preferences(raw_input):
     normalized_text = normalize_text(raw_input)
     tokens = tokenize(normalized_text)
     negation_scopes = find_negation_scopes(tokens)
+    soft_negation_scopes = find_soft_negation_scopes(tokens)
 
     moods, genres, themes = set(), set(), set()
     excluded_moods, excluded_genres, excluded_themes = set(), set(), set()
     excluded_keywords = set()
     content_descriptors, excluded_content_descriptors = set(), set()
+    soft_exclusions = set()
 
     # Track which token indices got claimed by a category match, so we
     # can build a "leftover words" bag for the TF-IDF/synopsis-similarity
@@ -98,6 +101,12 @@ def extract_preferences(raw_input):
         negated = is_within_negation_scope(start, end, negation_scopes)
         if not negated:
             negated = is_retroactively_negated(end, tokens)
+        softly_negated = is_within_negation_scope(start, end, soft_negation_scopes)
+        if softly_negated:
+            soft_exclusions.add(f"{hit['category']}:{hit['tag']}")
+            for k in range(start, end + 1):
+                claimed_indices.add(k)
+            continue
         target_set = {
             "mood": excluded_moods if negated else moods,
             "genre": excluded_genres if negated else genres,
@@ -111,7 +120,14 @@ def extract_preferences(raw_input):
         for k in range(start, end + 1):
             claimed_indices.add(k)
 
-    runtime = extract_runtime_constraint(normalized_text)
+    runtime = extract_runtime_constraint(raw_input)
+    if not any(runtime[key] is not None for key in ("min", "max", "target")):
+        from data.movies import MOVIES
+
+        runtime = extract_vague_runtime_constraint(
+            normalized_text,
+            [movie.get("runtime", 0) for movie in MOVIES],
+        ) or runtime
     release_year = extract_release_year_constraint(normalized_text)
     numeric_negation_cues = {"not", "no", "without", "except", "excluding", "avoid", "avoiding", "skip", "but"}
     for index, token in enumerate(tokens):
@@ -150,6 +166,16 @@ def extract_preferences(raw_input):
         token for token in remove_stopwords(leftover_tokens)
         if token not in excluded_keywords
     ]
+    has_standalone_no_thanks = any(
+        tokens[index:index + 2] == ["no", "thanks"]
+        for index in range(len(tokens) - 1)
+    )
+    unclear_negation = bool(
+        any(token in NEGATION_CUES for token in tokens)
+        and not negation_scopes
+        and not soft_negation_scopes
+        and not has_standalone_no_thanks
+    )
 
     return {
         "raw_input": raw_input,
@@ -164,6 +190,8 @@ def extract_preferences(raw_input):
         "excluded_keywords": sorted(excluded_keywords),
         "content_descriptors": sorted(content_descriptors),
         "excluded_content_descriptors": sorted(excluded_content_descriptors),
+        "soft_exclusions": sorted(soft_exclusions),
+        "unclear_negation": unclear_negation,
         "runtime": runtime,
         "release_year": release_year,
         "free_text_keywords": free_text_keywords,

@@ -35,6 +35,7 @@ from .runtime import WORD_NUMBERS
 from .scoring import is_excluded
 from .similarity import cosine_similarity, vector_norm
 from .tfidf import build_tfidf_model, simple_word_tokens, vectorize_query
+from .catalog_matching import normalize_title
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -95,7 +96,7 @@ def _shared_key(namespace, value):
     return f"movie-finder:{namespace}:{hashlib.sha256(encoded).hexdigest()}"
 
 SIMILAR_TO_PATTERN = re.compile(
-    r"\b(?:similar to|something like|more like|(?:movies?|films?) like|like)\s+([a-z0-9][a-z0-9 :'&-]{1,60}?)"
+    r"\b(?:similar to|in the style of|such as|something like|more like|(?:movies?|films?) like|like)\s+([a-z0-9][a-z0-9 :'&-]{1,100}?)"
     r"(?=\s+(?:but|with|without|that|from|in|and|except)\b|$)"
 )
 
@@ -980,8 +981,12 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
         source_vector = tfidf_model.get("vectors", {}).get(source_id)
         if source_vector:
             similar = []
+            source_title_key = normalize_title(understanding.get("similar_to") or "")
             for position, movie in enumerate(movies):
-                if movie.get("id") == source_id:
+                if (
+                    movie.get("id") == source_id
+                    or normalize_title(movie.get("title", "")) == source_title_key
+                ):
                     continue
                 movie_vector = tfidf_model.get("vectors", {}).get(movie.get("id"), {})
                 score = cosine_similarity(

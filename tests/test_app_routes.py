@@ -344,7 +344,10 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn("The Lion King", titles)
         self.assertNotIn("Lion", titles)
         self.assertIn(b'data-i18n="closestMatch"', response.data)
-        self.assertEqual(find_title_matches("scary movie movies", MOVIES), [])
+        self.assertIn(
+            "Scary Movie",
+            [movie["title"] for movie in find_title_matches("scary movie movies", MOVIES)],
+        )
 
     def test_title_evidence_requires_the_complete_title_phrase(self):
         self.assertTrue(_contains_complete_title(

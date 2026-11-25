@@ -238,6 +238,18 @@ def score_movie(
         weighted = sum(v * (BASE_WEIGHTS[k] / weight_sum) for k, v in active_factors.items())
         percent = round(weighted * 100)
 
+    soft_exclusions = preferences.get("soft_exclusions", [])
+    for exclusion in soft_exclusions:
+        category, _, tag = exclusion.partition(":")
+        primary_tags = {
+            "genre": movie.get("genres", []),
+            "mood": movie.get("mood_tags", []),
+            "theme": movie.get("themes", []),
+            "content_descriptor": movie.get("content_descriptors", []),
+        }.get(category, [])
+        if tag in primary_tags:
+            percent -= 15
+
     return {
         "percent": max(0, min(100, percent)),
         "breakdown": {

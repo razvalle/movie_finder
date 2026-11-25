@@ -134,6 +134,17 @@ JSON report. Re-run the benchmark with `python tests/relevance_benchmark.py`
 after code or catalog changes; do not treat these generated queries as validated
 user behavior.
 
+### Editable query rules
+
+`data/query_rules.json` contains editable negation cues and degree words,
+postposed-negation scope patterns, country/demonym aliases, runtime percentiles,
+and the minimum vote count used by Bayesian rating sorts. Audience and occasion
+mappings (for example, kids/family-night/date-night to genres and a maximum
+certification) are hand-written product interpretations, not catalog-derived
+facts. Certification limits are only enforced when a movie has a recognized
+rating; the current catalog has no certification data, so audience searches
+show that limitation instead of implying that every result is age-verified.
+
 ### Adding real plot descriptions
 
 TMDB provides real plot overviews. Set a TMDB v3 API key in the terminal and

@@ -21,8 +21,22 @@ CURRENT_YEAR = date.today().year
 def extract_release_year_constraint(normalized_text):
     match = re.search(r"\b(19\d{2}|20\d{2})\s*(?:-|to|through|until)\s*(19\d{2}|20\d{2})\b", normalized_text)
     if match:
-        start, end = sorted((int(match.group(1)), int(match.group(2))))
+        start, end = int(match.group(1)), int(match.group(2))
         return {"min": start, "max": end}
+
+    minimums = []
+    maximums = []
+    for match in re.finditer(r"\b(after|since|starting in)\s+(19\d{2}|20\d{2})\b", normalized_text):
+        offset = 1 if match.group(1) == "after" else 0
+        minimums.append(int(match.group(2)) + offset)
+    for match in re.finditer(r"\b(before|until)\s+(19\d{2}|20\d{2})\b", normalized_text):
+        offset = 0 if match.group(1) == "until" else -1
+        maximums.append(int(match.group(2)) + offset)
+    if minimums or maximums:
+        return {
+            "min": max(minimums) if minimums else None,
+            "max": min(maximums) if maximums else None,
+        }
 
     match = re.search(r"\b(?:from the |from |in )?(\d{2}|\d{4})s\b", normalized_text)
     if match:

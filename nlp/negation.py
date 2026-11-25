@@ -22,18 +22,23 @@ when extract.py checks the scope.
 -----------------------------------------------------------------------
 """
 
-NEGATION_CUES = {
-    "not", "no", "without", "except", "excluding", "avoid", "avoiding",
-    "exclude", "excluding", "skip", "skipping", "besides", "leave",
-    "never", "none", "nothing", "unless", "walang", "huwag", "ayaw",
+from .catalog_matching import load_query_rules
+
+
+_QUERY_RULES = load_query_rules()
+NEGATION_CUES = set(_QUERY_RULES["negation_cues"]) | {
+    "exclude", "excluding", "skipping", "besides", "leave", "never", "none", "nothing", "unless",
 }
+SOFT_DEGREE_WORDS = set(_QUERY_RULES["soft_degree_words"])
 
 # Two-word cues are checked separately since our tokens are single words.
 NEGATION_CUE_BIGRAMS = {
     "do not", "does not", "did not", "would not", "rather not",
     "dont want", "do not want", "does not want", "did not want",
-    "anything but", "everything but", "all but", "other than",
-    "apart from", "leave out", "skip over",
+    "everything but", "all but",
+    "apart from", "leave out", "skip over", "instead of", "rather than",
+} | {
+    cue for cue in _QUERY_RULES["negation_cues"] if " " in cue
 }
 
 SCOPE_BREAKERS = {
@@ -50,6 +55,8 @@ def find_negation_scopes(tokens):
     for i in range(len(tokens)):
         cue_length = 0
 
+        if tokens[i] == "no" and i + 1 < len(tokens) and tokens[i + 1] == "thanks":
+            continue
         # "I do not mind comedy" expresses openness, not exclusion.
         if (
             tokens[i] == "not" and i + 1 < len(tokens) and tokens[i + 1] == "mind"
@@ -73,6 +80,9 @@ def find_negation_scopes(tokens):
             continue
 
         scope_start = i + cue_length
+        if tokens[i] in {"not", "nothing"} and scope_start < len(tokens) and tokens[scope_start] in SOFT_DEGREE_WORDS:
+            scope_start += 1
+            continue
         scope_end = scope_start - 1  # exclusive-of-nothing sentinel
 
         j = scope_start
@@ -85,6 +95,28 @@ def find_negation_scopes(tokens):
         if scope_end >= scope_start:
             scopes.append((scope_start, scope_end))
 
+    for rule in _QUERY_RULES["postposed_negation"]:
+        if rule.get("scope") != "term":
+            continue
+        prefix, _, suffix = rule["pattern"].partition("{term}")
+        prefix_tokens = prefix.split()
+        suffix_tokens = suffix.split()
+        prefix_matches = not prefix_tokens or tokens[:len(prefix_tokens)] == prefix_tokens
+        if not prefix_matches:
+            continue
+        if suffix_tokens:
+            suffix_length = len(suffix_tokens)
+            for end in range(len(prefix_tokens) + suffix_length, len(tokens) + 1):
+                if tokens[end - suffix_length:end] != suffix_tokens:
+                    continue
+                term_end = end - suffix_length - 1
+                term_start = max(len(prefix_tokens), term_end - MAX_SCOPE_WORDS + 1)
+                if term_end >= term_start:
+                    scopes.append((term_start, term_end))
+        elif prefix_tokens and len(tokens) > len(prefix_tokens):
+            term_start = len(prefix_tokens)
+            scopes.append((term_start, min(len(tokens) - 1, term_start + MAX_SCOPE_WORDS - 1)))
+
     # In broad requests, "every genre but horror" means horror is excluded.
     for i, token in enumerate(tokens):
         if token != "but" or i + 1 >= len(tokens):
@@ -93,6 +125,26 @@ def find_negation_scopes(tokens):
         if any(word in prior for word in {"every", "all", "any", "anything", "everything"}):
             scopes.append((i + 1, len(tokens) - 1))
 
+    return scopes
+
+
+def find_soft_negation_scopes(tokens):
+    """Return spans following data-configured degree hedges such as 'not too X'."""
+    scopes = []
+    for index, token in enumerate(tokens):
+        if token not in {"not", "nothing"}:
+            continue
+        degree_index = index + 1
+        if degree_index < len(tokens) and tokens[degree_index] in SOFT_DEGREE_WORDS:
+            term_index = degree_index + 1
+            if term_index < len(tokens):
+                end = term_index - 1
+                for position in range(term_index, min(len(tokens), term_index + MAX_SCOPE_WORDS)):
+                    if tokens[position] == "," or tokens[position] in SCOPE_BREAKERS:
+                        break
+                    end = position
+                if end >= term_index:
+                    scopes.append((term_index, end))
     return scopes
 
 

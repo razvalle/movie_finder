@@ -170,7 +170,11 @@
         <button type="button" data-open-about>About this data</button>
       </div>
       {% for conflict in filter_conflicts %}
-        <p class="filter-conflict" data-i18n="{{ 'genreFilterConflict' if 'genre' in conflict else 'countryFilterConflict' }}">{{ conflict }}</p>
+        <p class="filter-conflict">{{ conflict }}
+          {% for tag in preference_tags if tag.remove_url %}
+            <a class="pref-tag__remove" href="{{ tag.remove_url }}" aria-label="Remove {{ tag.phrase }}">Remove {{ tag.phrase }}</a>
+          {% endfor %}
+        </p>
       {% endfor %}
       <p class="search__status" role="status" aria-live="polite"></p>
       <div class="offline-notice" data-offline-notice role="status" aria-live="polite" hidden>
@@ -290,6 +294,23 @@
           <p class="results__range" role="status" aria-live="polite">Showing {{ range_start }}-{{ range_end }} of {{ result_count }}</p>
         {% endif %}
         {% if feedback_saved %}<p class="search-notice" role="status" data-i18n="feedbackSaved">Feedback saved. Thanks.</p>{% endif %}
+        {% if like_title_suggestions %}
+          <ul class="search-alternatives" aria-label="Nearby title suggestions">
+            {% for suggestion in like_title_suggestions %}
+              <li><a href="{{ url_for('index', q='movies like ' ~ suggestion.title) }}">{{ suggestion.title }}{% if suggestion.get('release_year') %} ({{ suggestion.release_year }}){% endif %}</a></li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+        {% if similar_series_members %}
+          <div class="search-alternatives" aria-label="Other entries in this series">
+            <strong>Other entries in the series containing {{ similar_to_title }}</strong>
+            <ul>
+              {% for member in similar_series_members %}
+                <li><a href="{{ url_for('index', q=member.title) }}">{{ member.title }}{% if member.get('release_year') %} ({{ member.release_year }}){% endif %}</a></li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
 
         {% if total_pages > 1 and (searched or movies) %}
           <nav class="pagination pagination--top" aria-label="Movie pages" data-i18n-aria="paginationLabel">

@@ -27,11 +27,25 @@ class RuntimeParsingTests(unittest.TestCase):
         self.assertEqual(extract_runtime_constraint("around 1h30")["target"], 90)
         self.assertEqual(extract_runtime_constraint("two and a half hours")["target"], 150)
 
+    def test_inherited_units_and_conflicting_runtime_bounds(self):
+        self.assertEqual(
+            extract_runtime_constraint("between 90 minutes and 2 hours"),
+            {"min": 90, "max": 120, "target": None, "tolerance": 15},
+        )
+        self.assertEqual(
+            extract_runtime_constraint("at least 120 minutes and under 90 minutes"),
+            {"min": 120, "max": 89, "target": None, "tolerance": 15},
+        )
+
     def test_spelled_out_decade_matches_digit_forms(self):
         expected = {"min": 1990, "max": 1999}
         self.assertEqual(extract_release_year_constraint("movies from the 90s"), expected)
         self.assertEqual(extract_release_year_constraint("movies from the 1990s"), expected)
         self.assertEqual(extract_release_year_constraint("movies from the nineties"), expected)
+        self.assertEqual(
+            extract_release_year_constraint("movies after 2020 and before 2000"),
+            {"min": 2021, "max": 1999},
+        )
 
 
 if __name__ == "__main__":

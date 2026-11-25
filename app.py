@@ -34,13 +34,28 @@ from flask import (
 )
 
 from data.movies import MOVIES
-from data.synonyms import GENRE_SYNONYMS, MOOD_SYNONYMS, THEME_SYNONYMS
+from data.synonyms import (
+    CONTENT_DESCRIPTOR_SYNONYMS,
+    GENRE_SYNONYMS,
+    MOOD_SYNONYMS,
+    THEME_SYNONYMS,
+)
 from feedback_store import FEEDBACK_DB_PATH, record_feedback
 from poster_storage import poster_public_base_url, poster_public_url
 from nlp.extract import extract_preferences
 from nlp.normalize import normalize_text
-from nlp.query import build_structured_query, detect_country
-from nlp.tfidf import load_or_build_tfidf_model
+from nlp.tokenize import STOPWORDS as TOKEN_STOPWORDS
+from nlp.query import (
+    build_structured_query,
+    detect_cast_gender_constraint,
+    detect_country,
+    detect_people_and_language,
+)
+from nlp.tfidf import (
+    build_tfidf_model,
+    load_or_build_tfidf_model,
+    movie_to_similarity_document_text,
+)
 from nlp.scoring import is_excluded, rank_movies
 from nlp.explain import explain_match, title_case
 from nlp.conversation import build_alternative_queries, build_assistant_message
@@ -60,13 +75,26 @@ from nlp.cast_verification import classify_cast_gender, evaluate_cast_constraint
 from nlp.search_diagnostics import SearchTrace, write_search_record
 from nlp.catalog_matching import (
     SERIES_MEMBER_MATCH_PERCENT,
+    detect_title_spans,
     derive_series_groups,
+    find_like_source_text,
+    load_query_rules,
     normalize_title,
     title_aliases,
+    title_risk_vocabulary,
+    resolve_like_title,
 )
+
+TITLE_STOP_WORDS = set(STOP_WORDS) | TOKEN_STOPWORDS
 
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
+_TOTAL_VOTES = sum(movie.get("vote_count") or 0 for movie in MOVIES)
+_BAYESIAN_RATING_PRIOR = sum(
+    (movie.get("average_rating") or 0) * (movie.get("vote_count") or 0)
+    for movie in MOVIES
+) / max(1, _TOTAL_VOTES)
+_BAYESIAN_MINIMUM_VOTES = load_query_rules()["bayesian_minimum_votes"]
 _TOPIC_SUPPORT_SOURCE = None
 _TOPIC_SUPPORT = None
 _GENERATED_SYNOPSIS_RE = re.compile(
@@ -83,6 +111,10 @@ if POSTER_PUBLIC_BASE_URL:
 CATALOG_PATH = Path(__file__).parent / "data" / "imdb_movies.json"
 TFIDF_CACHE_PATH = Path(__file__).parent / "data" / "tfidf_cache.pkl"
 TFIDF_MODEL = load_or_build_tfidf_model(MOVIES, TFIDF_CACHE_PATH, CATALOG_PATH)
+LIKE_TFIDF_MODEL = build_tfidf_model(
+    MOVIES,
+    document_text_builder=movie_to_similarity_document_text,
+)
 TITLE_INDEX = {}
 TITLE_EXACT_INDEX = {}
 TITLE_TOKEN_INDEX = {}
@@ -102,7 +134,13 @@ def _canonical_genre(value):
 
 
 def _title_key(value, fold_accents=True):
-    return normalize_title(value)
+    if fold_accents:
+        return normalize_title(value)
+    text = unicodedata.normalize("NFC", str(value or "")).casefold()
+    text = re.sub(r"[‘’']", "", text)
+    text = re.sub(r"[^\w]+", " ", text, flags=re.UNICODE)
+    text = re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"^(?:the|a|an)\s+", "", text)
 
 
 for movie in MOVIES:
@@ -111,12 +149,12 @@ for movie in MOVIES:
     TITLE_INDEX.setdefault(normalized_title, []).append(movie)
     for alias in title_aliases(movie):
         TITLE_INDEX.setdefault(alias, []).append(movie)
-        TITLE_EXACT_INDEX.setdefault(alias, []).append(movie)
     for token in set(normalized_title.split()):
         if len(token) >= 4:
             TITLE_TOKEN_INDEX.setdefault(token, []).append(movie)
 
 SERIES_GROUPS = derive_series_groups(MOVIES)
+RISKY_TITLE_VOCABULARY = title_risk_vocabulary(MOVIES)
 
 EXAMPLE_QUERIES = [
     "I want something suspenseful but not horror, preferably a mystery under two hours.",
@@ -436,15 +474,79 @@ def movie_matches_recognition(movie, selected_keys):
     )
 
 
+def _concept_forms(table, tag):
+    normalized_tag = normalize_title(tag)
+    forms = {normalized_tag} if normalized_tag else set()
+    for canonical, synonyms in table.items():
+        canonical_forms = {
+            normalize_title(value)
+            for value in (canonical, *synonyms)
+            if normalize_title(value)
+        }
+        if normalized_tag in canonical_forms:
+            forms.update(canonical_forms)
+    return forms
+
+
+def find_filter_conflicts(preferences, selected_genres=()):
+    """Report include/exclude and impossible range combinations from parsed filters."""
+    includes = [
+        (category, tag, table)
+        for category, key, table in (
+            ("genre", "genres", GENRE_SYNONYMS),
+            ("mood", "moods", MOOD_SYNONYMS),
+            ("theme", "themes", THEME_SYNONYMS),
+        )
+        for tag in preferences.get(key, [])
+    ]
+    includes.extend(("genre", tag, GENRE_SYNONYMS) for tag in selected_genres)
+    excludes = [
+        (category, tag, table)
+        for category, key, table in (
+            ("genre", "excluded_genres", GENRE_SYNONYMS),
+            ("mood", "excluded_moods", MOOD_SYNONYMS),
+            ("theme", "excluded_themes", THEME_SYNONYMS),
+            ("content", "excluded_content_descriptors", CONTENT_DESCRIPTOR_SYNONYMS),
+        )
+        for tag in preferences.get(key, [])
+    ]
+    messages = []
+    for include_category, include_tag, include_table in includes:
+        include_forms = _concept_forms(include_table, include_tag)
+        for exclude_category, exclude_tag, exclude_table in excludes:
+            if include_forms.intersection(_concept_forms(exclude_table, exclude_tag)):
+                message = (
+                    f"Conflict: {title_case(include_tag)} is both included and excluded; "
+                    f"exclusions win. Remove either filter below."
+                )
+                if message not in messages:
+                    messages.append(message)
+    runtime = preferences.get("runtime") or {}
+    if runtime.get("min") is not None and runtime.get("max") is not None and runtime["min"] > runtime["max"]:
+        messages.append("Conflict: minimum runtime exceeds maximum runtime. Remove either side below.")
+    year = preferences.get("release_year") or {}
+    if year.get("min") is not None and year.get("max") is not None and year["min"] > year["max"]:
+        messages.append("Conflict: minimum year exceeds maximum year. Remove either side below.")
+    return messages
+
+
 def ranking_key(entry, ranking_intent):
     movie = entry["movie"]
     rating = movie.get("average_rating") or 0
     votes = movie.get("vote_count") or 0
     year = movie.get("release_year") or 0
+    weighted_prior = _BAYESIAN_RATING_PRIOR
+    minimum_votes = _BAYESIAN_MINIMUM_VOTES
+    adjusted_rating = (
+        (votes / (votes + minimum_votes)) * rating
+        + (minimum_votes / (votes + minimum_votes)) * weighted_prior
+    ) if votes + minimum_votes else weighted_prior
     if ranking_intent == "popular":
         return (votes, rating, entry["percent"], year)
     if ranking_intent == "best":
-        return (rating, votes, entry["percent"], year)
+        return (adjusted_rating, votes, entry["percent"], year)
+    if ranking_intent == "worst":
+        return (-adjusted_rating, votes, entry["percent"], year)
     return (entry["percent"], rating, votes, year)
 
 
@@ -518,6 +620,64 @@ def movie_country_codes(movie):
     return movie.get("production_countries") or movie.get("origin_regions", [movie.get("nationality")])
 
 
+def build_entity_index(movies):
+    """Build normalized indexes for every searchable catalog entity field."""
+    fields = {
+        "cast": ("cast", "actors"),
+        "director": ("director", "directors"),
+        "writer": ("writer", "writers"),
+        "language": ("original_language", "language"),
+        "certification": ("certification", "content_rating", "rating_certificate"),
+        "award": ("notable_awards",),
+    }
+    indexes = {name: {} for name in (*fields, "country")}
+    for movie in movies:
+        movie_id = str(movie.get("id"))
+        for entity_type, keys in fields.items():
+            for key in keys:
+                values = movie.get(key) or []
+                if isinstance(values, str):
+                    values = [values]
+                for value in values:
+                    name = value.get("name", "") if isinstance(value, dict) else value
+                    normalized = normalize_title(name)
+                    if normalized:
+                        indexes[entity_type].setdefault(normalized, set()).add(movie_id)
+                        if entity_type == "language":
+                            try:
+                                language = pycountry.languages.lookup(name)
+                            except LookupError:
+                                language = None
+                            if language:
+                                for language_name in (getattr(language, "name", ""), getattr(language, "alpha_2", "")):
+                                    language_key = normalize_title(language_name)
+                                    if language_key:
+                                        indexes[entity_type].setdefault(language_key, set()).add(movie_id)
+        for code in movie_country_codes(movie) or []:
+            normalized = str(code).strip().upper()
+            if normalized:
+                indexes["country"].setdefault(normalized, set()).add(movie_id)
+        for key in RECOGNITION_OPTIONS:
+            if movie_matches_recognition(movie, [key]):
+                indexes["award"].setdefault(key, set()).add(movie_id)
+    return indexes
+
+
+ENTITY_INDEX = build_entity_index(MOVIES)
+_CATALOG_SOURCE = MOVIES
+CATALOG_FIELD_COVERAGE = {
+    "cast": sum(bool(movie.get("cast") or movie.get("actors")) for movie in MOVIES),
+    "director": sum(bool(movie.get("director") or movie.get("directors")) for movie in MOVIES),
+    "writer": sum(bool(movie.get("writer") or movie.get("writers")) for movie in MOVIES),
+    "country": sum(bool(movie_country_codes(movie)) for movie in MOVIES),
+    "language": sum(bool(movie.get("original_language") or movie.get("language")) for movie in MOVIES),
+    "award": sum(bool(movie.get("notable_awards")) for movie in MOVIES),
+    "certification": sum(bool(
+        movie.get("certification") or movie.get("content_rating") or movie.get("rating_certificate")
+    ) for movie in MOVIES),
+}
+
+
 def movie_matches_release_year(movie, constraint):
     """Apply an explicit release-year request as a hard catalog filter."""
     if not constraint:
@@ -542,6 +702,68 @@ GENERIC_TITLE_TOKENS = {
 def find_title_matches(query, movies):
     """Find titles written exactly or as a phrase inside a natural-language query."""
     normalized_query = _title_key(query)
+    risky_words = TITLE_STOP_WORDS | {
+        "movie", "movies", "film", "films", "genre", "year",
+    }
+    spans = detect_title_spans(query, movies, risky_words, RISKY_TITLE_VOCABULARY)
+    spans = _filter_entity_title_spans(query, spans)
+    if spans and not any(span["whole_query"] for span in spans):
+        prefix_key = _title_key(query).strip()
+        if len(prefix_key.split()) >= 2:
+            prefix_matches = [
+                movie for movie in movies
+                if any(alias.startswith(prefix_key) for alias in title_aliases(movie))
+            ]
+            if prefix_matches:
+                return sorted(
+                    prefix_matches,
+                    key=lambda movie: (
+                        -(movie.get("vote_count") or 0),
+                        str(movie.get("title", "")).casefold(),
+                    ),
+                )
+    if spans:
+        span = spans[0]
+        named = list(span["movies"])
+        literal_title_matches = [
+            movie for movie in named
+            if re.search(
+                rf"(?<!\w){re.escape(unicodedata.normalize('NFC', movie.get('title', '')).casefold())}(?!\w)",
+                unicodedata.normalize("NFC", str(query)).casefold(),
+                flags=re.UNICODE,
+            )
+        ]
+        if literal_title_matches:
+            named = literal_title_matches
+        if span["whole_query"]:
+            exact_key = " ".join(
+                word for word in _title_key(query, fold_accents=False).split()
+                if word not in {"movie", "movies", "film", "films"}
+            )
+            exact_records = TITLE_EXACT_INDEX.get(exact_key, [])
+            if exact_records:
+                available_ids = {str(movie.get("id")) for movie in movies}
+                named = [
+                    movie for movie in exact_records
+                    if str(movie.get("id")) in available_ids
+                ]
+            else:
+                canonical_matches = [
+                    movie for movie in named
+                    if normalize_title(movie.get("title", "")) == span["alias"]
+                ]
+                if canonical_matches:
+                    named = canonical_matches
+            query_year = re.search(r"\b((?:18|19|20)\d{2})\b", str(query))
+            year = int(query_year.group(1)) if query_year else None
+            if year:
+                year_matches = [movie for movie in named if movie.get("release_year") == year]
+                if year_matches:
+                    named = year_matches
+            return named
+        if span["explicit"] or len(span["alias"].replace(" ", "")) > 3:
+            return named
+
     query_year = re.search(r"\b((?:18|19|20)\d{2})\b", str(query))
     query_year = int(query_year.group(1)) if query_year else None
 
@@ -803,21 +1025,69 @@ def find_title_matches(query, movies):
     ]
 
 
+def _filter_entity_title_spans(query, spans):
+    normalized = normalize_text(query)
+    people, languages = detect_people_and_language(normalized)
+    cast_constraint = detect_cast_gender_constraint(normalized)
+    entity_values = []
+    for value in [*people, *languages]:
+        parsed = extract_preferences(value)
+        if cast_constraint or not any((
+            parsed["genres"], parsed["moods"], parsed["themes"],
+        )):
+            entity_values.append(normalize_title(value))
+    if not entity_values:
+        return spans
+    filtered = []
+    for span in spans:
+        if span["whole_query"] or span["explicit"]:
+            filtered.append(span)
+            continue
+        if any(
+            re.search(rf"(?<![a-z0-9]){re.escape(span['alias'])}(?![a-z0-9])", value)
+            for value in entity_values
+        ):
+            continue
+        filtered.append(span)
+    return filtered
+
+
 def remove_title_text(query, title_matches):
     """Remove a detected title so its words cannot become search preferences."""
     normalized = _title_key(query)
     for movie in title_matches:
-        title = _title_key(movie["title"])
-        normalized = re.sub(rf"(?<![a-z0-9]){re.escape(title)}(?![a-z0-9])", " ", normalized)
+        for title in sorted(title_aliases(movie), key=len, reverse=True):
+            normalized = re.sub(
+                rf"(?<![a-z0-9]){re.escape(title)}(?![a-z0-9])",
+                " ",
+                normalized,
+            )
     return " ".join(normalized.split())
 
 
 def is_exact_title_query(query, title_matches):
     """True when the entire query is one movie title, ignoring case and punctuation."""
+    if any(
+        span["whole_query"]
+        for span in detect_title_spans(
+            query, title_matches, TITLE_STOP_WORDS, RISKY_TITLE_VOCABULARY,
+        )
+    ):
+        return True
     normalized_query = _title_key(query)
-    normalized_without_article = re.sub(r"^(?:the|a|an)\s+", "", normalized_query)
+    words = normalized_query.split()
+    words_without_fillers = [
+        word for word in words if word not in {"movie", "movies", "film", "films"}
+    ]
+    query_without_year = [
+        word for word in words_without_fillers
+        if not re.fullmatch(r"(?:18|19|20)\d{2}", word)
+    ]
+    normalized_without_fillers = " ".join(words_without_fillers)
+    normalized_without_article = " ".join(query_without_year)
     return any(
         normalized_query in title_aliases(movie)
+        or normalized_without_fillers in title_aliases(movie)
         or normalized_without_article in title_aliases(movie)
         for movie in title_matches
     )
@@ -887,12 +1157,36 @@ def drop_constraints(preferences, understanding, drops):
                 understanding["filters"]["runtime"] = {
                     "min": None, "max": None, "target": None,
                 }
+        elif kind == "runtime_min":
+            preferences["runtime"]["min"] = None
+        elif kind == "runtime_max":
+            preferences["runtime"]["max"] = None
         elif kind == "year":
             preferences["release_year"] = None
             if understanding:
                 understanding["year_range"] = {"from": None, "to": None}
                 understanding["filters"]["year_range"] = {"from": None, "to": None}
                 understanding["hard_constraints"] = [c for c in understanding["hard_constraints"] if c != "release year"]
+        elif kind == "year_min" and preferences.get("release_year"):
+            preferences["release_year"]["min"] = None
+        elif kind == "year_max" and preferences.get("release_year"):
+            preferences["release_year"]["max"] = None
+        elif kind == "soft_exclusion":
+            preferences["soft_exclusions"] = [
+                item for item in preferences.get("soft_exclusions", []) if item != value
+            ]
+        elif kind == "audience":
+            preferences["audience_intents"] = [
+                item for item in preferences.get("audience_intents", []) if item != value
+            ]
+            preferences.get("audience_certification_limits", {}).pop(value, None)
+            mapping = load_query_rules()["audience_occasions"].get(value, {})
+            for genre in mapping.get("genres", []):
+                preferences["genres"] = [
+                    item for item in preferences.get("genres", []) if item != genre
+                ]
+        elif kind == "negation":
+            preferences["unclear_negation"] = False
 
 
 def movie_matches_runtime_limits(movie, preferences):
@@ -903,6 +1197,31 @@ def movie_matches_runtime_limits(movie, preferences):
         return True
     length = movie.get("runtime") or 0
     return length > 0 and (low is None or length >= low) and (high is None or length <= high)
+
+
+def movie_matches_audience_certification(movie, preferences):
+    limits = list((preferences or {}).get("audience_certification_limits", {}).values())
+    limits = [limit for limit in limits if limit]
+    if not limits:
+        return True
+    certification = next((
+        movie.get(key) for key in ("certification", "content_rating", "rating_certificate")
+        if movie.get(key)
+    ), "")
+    if not certification:
+        return True
+    scale = {"G": 0, "PG": 1, "PG-13": 2, "R": 3, "NC-17": 4}
+    value = normalize_title(certification).replace(" ", "-").upper()
+    value = {"PG13": "PG-13", "NC17": "NC-17"}.get(value, value)
+    if value not in scale:
+        return True
+    return all(
+        scale[value] <= scale.get(
+            normalize_title(limit).replace(" ", "-").upper(),
+            scale["NC-17"],
+        )
+        for limit in limits
+    )
 
 
 def describe_tag(tag):
@@ -952,9 +1271,34 @@ def build_preference_tags(preferences, excluded_count):
             "type": "exclude", "label": "Exclude", "value": title_case(keyword),
             "key": f"exclude_keyword:{keyword}",
         })
+    for exclusion in preferences.get("soft_exclusions", []):
+        _, _, value = exclusion.partition(":")
+        tags.append({
+            "type": "exclude",
+            "label": "mild only",
+            "value": title_case(value),
+            "key": f"soft_exclusion:{exclusion}",
+        })
+    for intent in preferences.get("audience_intents", []):
+        tags.append({
+            "type": "neutral",
+            "label": "Audience",
+            "value": title_case(intent),
+            "key": f"audience:{intent}",
+        })
+    if preferences.get("unclear_negation"):
+        tags.append({
+            "type": "exclude",
+            "label": "Clarify",
+            "value": "I wasn't sure what to exclude",
+            "key": "negation:unclear",
+        })
 
     rt = preferences["runtime"]
-    if rt["max"] is not None and rt["min"] is not None:
+    if rt["max"] is not None and rt["min"] is not None and rt["min"] > rt["max"]:
+        tags.append({"type": "neutral", "label": "Runtime", "value": f"> {rt['min']} min", "key": "runtime_min"})
+        tags.append({"type": "neutral", "label": "Runtime", "value": f"< {rt['max']} min", "key": "runtime_max"})
+    elif rt["max"] is not None and rt["min"] is not None:
         tags.append({"type": "neutral", "label": "Runtime", "value": f"{rt['min']}-{rt['max']} min", "key": "runtime"})
     elif rt["max"] is not None:
         tags.append({"type": "neutral", "label": "Runtime", "value": f"< {rt['max']} min", "key": "runtime"})
@@ -965,7 +1309,10 @@ def build_preference_tags(preferences, excluded_count):
 
     ry = preferences["release_year"]
     if ry:
-        if ry["min"] and ry["max"]:
+        if ry["min"] and ry["max"] and ry["min"] > ry["max"]:
+            tags.append({"type": "neutral", "label": "Year", "value": f"after {ry['min']}", "key": "year_min"})
+            tags.append({"type": "neutral", "label": "Year", "value": f"before {ry['max']}", "key": "year_max"})
+        elif ry["min"] and ry["max"]:
             tags.append({"type": "neutral", "label": "Year", "value": f"{ry['min']}-{ry['max']}", "key": "year"})
         elif ry["min"]:
             tags.append({"type": "neutral", "label": "Year", "value": f"after {ry['min']}", "key": "year"})
@@ -1010,6 +1357,29 @@ def _renderable_preference_tags(preferences, excluded_count, dropped):
         } if "key" in tag else tag
         for tag in tags
     ]
+
+
+def _append_alternative_preference_tags(context, alternatives, dropped):
+    tags = context.setdefault("preference_tags", [])
+    existing_keys = {tag.get("key") for tag in tags}
+    for tag in alternatives:
+        key = tag.get("key")
+        if key in dropped or key in existing_keys:
+            continue
+        retained = {
+            name: request.args.getlist(name)[:12]
+            for name in ("q", "genre", "nationality", "awards", "per_page", "page", "debug", "drop")
+            if request.args.getlist(name)
+        }
+        tags.append({
+            **tag,
+            "phrase": tag["value"],
+            "remove_url": url_for(
+                "index",
+                **{**retained, "drop": (dropped + [key])[:32], "page": 1},
+            ),
+        })
+        existing_keys.add(key)
 
 
 def _result_tier_counts(results):
@@ -1160,6 +1530,7 @@ def index():
         f"Search was limited to the first {MAX_QUERY_LENGTH} characters."
         if query_was_capped else ""
     )
+    coverage_notices = []
     trace = getattr(g, "search_trace", None)
     if trace is not None:
         trace.count("input", 1 if query else 0)
@@ -1171,6 +1542,10 @@ def index():
     )
     if query and not allow_search(request.remote_addr or "unknown"):
         return "Search limit reached. Please wait a minute and try again.", 429
+    like_source_text = find_like_source_text(query) if query else None
+    like_source_movie, like_title_suggestions = (
+        resolve_like_title(query, MOVIES) if like_source_text else (None, [])
+    )
     debug_enabled = request.args.get("debug", "")[:16].strip().lower() in {"1", "true", "yes"}
     selected_genres = list(dict.fromkeys(
         _canonical_genre(value[:64].strip().lower())
@@ -1197,21 +1572,30 @@ def index():
         if award not in removed_awards
     ]
     award_filter = bool(selected_awards)
-    initial_query = _run_search_stage(
-        "parse",
-        lambda: build_structured_query(query),
-        None,
-        trace,
-    ) if query else None
-    if query and initial_query is None:
-        initial_query = _minimal_query_analysis(query, trace)
     filter_conflicts = []
     query_title_matches = _run_search_stage(
         "title-match",
         lambda: find_title_matches(query, MOVIES),
         [],
         trace,
-    ) if query else []
+    ) if query and not like_source_text else []
+    title_prefix_query = False
+    title_spans = _filter_entity_title_spans(query, detect_title_spans(
+        query, MOVIES, TITLE_STOP_WORDS, RISKY_TITLE_VOCABULARY,
+    )) if query and not like_source_text else []
+    embedded_title_intent = bool(title_spans and not title_spans[0]["whole_query"])
+    title_residual = (
+        "" if like_source_text else
+        remove_title_text(query, query_title_matches) if query_title_matches else query
+    )
+    initial_query = _run_search_stage(
+        "parse",
+        lambda: build_structured_query(title_residual),
+        None,
+        trace,
+    ) if query else None
+    if query and initial_query is None:
+        initial_query = _minimal_query_analysis(title_residual, trace)
     if trace is not None:
         trace.count("title-matches", len(query_title_matches))
     if query_title_matches:
@@ -1269,6 +1653,13 @@ def index():
         filter_conflicts.append("The country in your search overrides the country menu selection.")
     effective_nationality = detected_nationality or selected_nationality
     query_preferences = query_analysis["preferences"] if query_analysis else None
+    if query_preferences and query_preferences.get("audience_certification_limits"):
+        if CATALOG_FIELD_COVERAGE["certification"] < max(10, len(MOVIES) * 0.1):
+            coverage_notices.append(
+                "The catalog has certification data for only "
+                f"{CATALOG_FIELD_COVERAGE['certification']} of {len(MOVIES)} movies, "
+                "so age-rating limits cannot be checked reliably."
+            )
     if query_preferences and query_preferences["genres"]:
         if selected_genres and not any(genre in query_preferences["genres"] for genre in selected_genres):
             filter_conflicts.append("The selected genre filter overrides the genre in your search.")
@@ -1305,6 +1696,51 @@ def index():
             understanding = _minimal_understanding(preference_query, query_analysis)
         if raw_understanding and raw_understanding.get("similar_to"):
             understanding["similar_to"] = raw_understanding["similar_to"]
+    if like_source_movie and understanding:
+        understanding["similar_to"] = like_source_movie["title"]
+        understanding["similar_to_movie_id"] = like_source_movie["id"]
+    like_series_members = []
+    if like_source_movie:
+        like_series = next((
+            group for group in SERIES_GROUPS
+            if like_source_movie.get("title") in group["titles"]
+        ), None)
+        if like_series:
+            like_series_members = [
+                movie for movie in MOVIES
+                if movie.get("title") in like_series["titles"]
+                and movie.get("id") != like_source_movie.get("id")
+            ]
+    alternate_interpretations = []
+    if embedded_title_intent and query_preferences:
+        embedded_query_analysis = _run_search_stage(
+            "parse",
+            lambda: build_structured_query(query),
+            None,
+            trace,
+        )
+        embedded_preferences = (
+            embedded_query_analysis["preferences"] if embedded_query_analysis else {}
+        )
+        for field, label in (("genres", "genre"), ("moods", "mood"), ("themes", "theme")):
+            for value in embedded_preferences.get(field, []):
+                if value in query_preferences.get(field, []):
+                    continue
+                alternate_interpretations.append({
+                    "type": "neutral",
+                    "label": "Did you mean",
+                    "value": f"{title_case(value)} as a {label}?",
+                    "key": f"alternate:{label}:{value}",
+                })
+    bare_year_title = re.fullmatch(r"\s*((?:18|19|20)\d{2})\s*(?:movies?|films?)?\s*", query, re.IGNORECASE)
+    if bare_year_title and query_title_matches:
+        year_value = bare_year_title.group(1)
+        alternate_interpretations.append({
+            "type": "neutral",
+            "label": "Did you mean",
+            "value": f"{year_value} as a year?",
+            "key": f"alternate:year:{year_value}",
+        })
     try:
         per_page = int(request.args.get("per_page", str(DEFAULT_PER_PAGE))[:16])
     except ValueError:
@@ -1347,15 +1783,42 @@ def index():
         drop_constraints(query_preferences, understanding, dropped)
         dropped_genres = {d.partition(":")[2] for d in dropped if d.startswith("genre:")}
         query_genres = [genre for genre in query_genres if genre not in dropped_genres]
+        if any(value.startswith("audience:") for value in dropped):
+            query_genres = [
+                genre for genre in query_preferences.get("genres", [])
+                if genre not in query_preferences.get("excluded_genres", [])
+            ]
         llm_year_range = understanding["year_range"]
 
+    if query_preferences:
+        filter_conflicts.extend(
+            conflict for conflict in find_filter_conflicts(query_preferences, selected_genres)
+            if conflict not in filter_conflicts
+        )
     year_constraint = query_preferences["release_year"] if query_preferences else None
+    active_entity_index = (
+        ENTITY_INDEX if MOVIES is _CATALOG_SOURCE else build_entity_index(MOVIES)
+    )
+    country_ids = active_entity_index["country"].get(effective_nationality) if effective_nationality else None
+    award_ids = (
+        set().union(*(active_entity_index["award"].get(key, set()) for key in selected_awards))
+        if selected_awards else None
+    )
+    entity_ids = None
+    if query_preferences and query_preferences.get("entity_requests"):
+        entity_ids = None
+        for entity_request in query_preferences["entity_requests"]:
+            field = entity_request["field"]
+            entity_key = normalize_title(entity_request["value"])
+            request_ids = active_entity_index.get(field, {}).get(entity_key, set())
+            entity_ids = set(request_ids) if entity_ids is None else entity_ids.intersection(request_ids)
 
     def matching_base_filters(movie):
         return (
             (not selected_genres or any(genre in movie["genres"] for genre in selected_genres))
-            and (not effective_nationality or effective_nationality in movie_country_codes(movie))
-            and (not selected_awards or movie_matches_recognition(movie, selected_awards))
+            and (not effective_nationality or str(movie.get("id")) in (country_ids or set()))
+            and (not selected_awards or str(movie.get("id")) in (award_ids or set()))
+            and (entity_ids is None or str(movie.get("id")) in entity_ids)
         )
 
     base_movies = [movie for movie in MOVIES if matching_base_filters(movie)]
@@ -1374,6 +1837,8 @@ def index():
                 continue
             if not movie_matches_runtime_limits(movie, query_preferences):
                 continue
+            if not movie_matches_audience_certification(movie, query_preferences):
+                continue
             if query_preferences and is_excluded(movie, query_preferences):
                 continue
             if query_preferences and query_preferences.get("cast_gender") and not evaluate_cast_constraint(movie, query_preferences["cast_gender"]):
@@ -1389,7 +1854,7 @@ def index():
     filtered_movies = _run_search_stage("filter", search_pool, [], trace)
     if trace is not None:
         trace.count("filtered", len(filtered_movies))
-    search_notice = query_notice
+    search_notice = " ".join(part for part in (query_notice, *coverage_notices) if part)
     normalization_notice = ""
 
     context = {
@@ -1408,6 +1873,9 @@ def index():
         "assistant_state": "",
         "detected_nationality": detected_nationality,
         "filter_conflicts": filter_conflicts,
+        "similar_to_title": like_source_movie.get("title") if like_source_movie else "",
+        "similar_series_members": like_series_members,
+        "like_title_suggestions": like_title_suggestions,
         "nationality_label": COUNTRY_LABELS.get(effective_nationality, effective_nationality),
         "genres": genres,
         "nationalities": nationalities,
@@ -1437,39 +1905,72 @@ def index():
         "debug_enabled": debug_enabled,
         "debug_view": None,
     }
+    _append_alternative_preference_tags(context, alternate_interpretations, dropped)
     g.search_context = context
 
     if not query:
         context["assistant_message"] = build_assistant_message("", len(filtered_movies))
 
     if query:
-        unsupported = query_analysis["unsupported_filters"]
-        unsupported_requests = []
-        if unsupported["people"] and not any(movie.get("cast") or movie.get("actors") for movie in MOVIES):
-            unsupported_requests.append("cast and named-person credits")
-        if unsupported["languages"] and not any(
-            movie.get("original_language") or movie.get("language") for movie in MOVIES
-        ):
-            unsupported_requests.append("original-language metadata")
-        if unsupported.get("certifications") and not any(
-            movie.get("certification") or movie.get("content_rating") or movie.get("rating_certificate")
-            for movie in MOVIES
-        ):
-            unsupported_requests.append("certification ratings")
-        if unsupported_requests:
+        if like_source_text and not like_source_movie:
             context.update({
                 "searched": True,
                 "result_count": 0,
                 "result_count_label": "0 exact, 0 close, 0 related",
                 "results": [],
-                "search_notice": (
-                    "This catalog does not include " + ", ".join(unsupported_requests)
-                    + ". Try a search using supported genre, year, runtime, or country information."
-                ),
-                "assistant_message": (
-                    "This catalog does not include " + ", ".join(unsupported_requests)
-                    + ". Try a search using supported genre, year, runtime, or country information."
-                ),
+                "assistant_message": f"I couldn't find a catalog title matching “{like_source_text}”. Try one of the nearby titles below.",
+                "assistant_state": "empty",
+                "search_notice": "The source title was not resolved, so I did not fall back to a text search.",
+            })
+            if trace is not None:
+                trace.stage = "render"
+            return render_template("index.html", **context)
+        unsupported = query_analysis["unsupported_filters"]
+        unsupported_requests = []
+        requested_fields = []
+        if unsupported["people"]:
+            if re.search(r"\bstarring\b|\bwith\b", query_analysis["normalized_query"]):
+                requested_fields.append("cast")
+            if re.search(r"\bdirected by\b", query_analysis["normalized_query"]):
+                requested_fields.append("director")
+            if re.search(r"\bwritten by\b", query_analysis["normalized_query"]):
+                requested_fields.append("writer")
+            if not requested_fields:
+                requested_fields.append("cast")
+        if unsupported["languages"]:
+            requested_fields.append("language")
+        if unsupported.get("certifications"):
+            requested_fields.append("certification")
+        for field in dict.fromkeys(requested_fields):
+            coverage = CATALOG_FIELD_COVERAGE.get(field, 0)
+            if not coverage:
+                label = "cast" if field == "cast" else field
+                unsupported_requests.append(
+                    f"I can't search by {label} because the catalog has no {label} data. "
+                    f"The catalog does not include {label} data."
+                )
+            elif coverage < max(10, len(MOVIES) * 0.1):
+                coverage_notices.append(
+                    f"I can't reliably search by {field}: catalog data is available for "
+                    f"only {coverage} of {len(MOVIES)} movies."
+                )
+        if selected_awards or re.search(
+            r"\b(?:award|awards|winner|winners|winning)\b",
+            query_analysis["normalized_query"],
+        ):
+            if CATALOG_FIELD_COVERAGE["award"] < max(10, len(MOVIES) * 0.1):
+                coverage_notices.append(
+                    f"Awards are recorded for only {CATALOG_FIELD_COVERAGE['award']} of {len(MOVIES)} catalog movies."
+                )
+        if unsupported_requests:
+            notice = " ".join(unsupported_requests)
+            context.update({
+                "searched": True,
+                "result_count": 0,
+                "result_count_label": "0 exact, 0 close, 0 related",
+                "results": [],
+                "search_notice": notice,
+                "assistant_message": notice,
                 "assistant_state": "empty",
                 "alternative_queries": _run_search_stage(
                     "explain",
@@ -1533,6 +2034,17 @@ def index():
         else:
             title_matches = [movie for movie in query_title_matches if movie in filtered_movies]
         search_movies = title_matches or filtered_movies
+        if like_source_movie:
+            excluded_titles = {normalize_title(like_source_movie.get("title", ""))}
+            series_titles = next((
+                group["titles"] for group in SERIES_GROUPS
+                if like_source_movie.get("title") in group["titles"]
+            ), [])
+            excluded_titles.update(normalize_title(title) for title in series_titles)
+            search_movies = [
+                movie for movie in filtered_movies
+                if normalize_title(movie.get("title", "")) not in excluded_titles
+            ]
         ranking_preferences = preferences
         if title_matches and is_exact_title_query(query, title_matches):
             # Words such as "grand" can also be mood synonyms. For an exact
@@ -1576,7 +2088,10 @@ def index():
         else:
             candidates = _run_search_stage(
                 "expand-retrieve",
-                lambda: retrieve_candidates(query, retrieval_understanding, search_movies, TFIDF_MODEL),
+                lambda: retrieve_candidates(
+                    query, retrieval_understanding, search_movies,
+                    LIKE_TFIDF_MODEL if retrieval_understanding.get("similar_to") else TFIDF_MODEL,
+                ),
                 None,
                 trace,
             )
@@ -1699,7 +2214,12 @@ def index():
         if trace is not None:
             trace.count("scored", len(all_results))
         title_match_ids = {str(movie["id"]) for movie in title_matches} if title_matches else set()
-        title_query_is_exact = bool(title_matches and is_exact_title_query(query, title_matches))
+        title_query_is_exact = bool(
+            title_matches and (
+                is_exact_title_query(query, title_matches)
+                or embedded_title_intent and not title_prefix_query
+            )
+        )
         if title_match_ids and title_query_is_exact:
             for entry in all_results:
                 if str(entry["movie"]["id"]) in title_match_ids:
@@ -1743,9 +2263,16 @@ def index():
                     entry["match_tier"] = "exact"
                     entry["match_reason"] = (
                         f"Same series as {query.strip()}."
-                        if len(title_matches) > 1
+                        if len(title_matches) > 1 and not embedded_title_intent
+                        else f"Matched title span: {entry['movie']['title']}."
+                        if embedded_title_intent
                         else f"Matched title: {entry['movie']['title']}."
                     )
+        elif title_prefix_query:
+            for entry in all_results:
+                if str(entry["movie"]["id"]) in title_match_ids:
+                    entry["match_level"] = "partial"
+                    entry["match_tier"] = "close"
         safe_results = []
         eligible_ids = {str(movie.get("id")) for movie in filtered_movies}
         for entry in all_results:
@@ -1846,7 +2373,7 @@ def index():
             else:
                 genre_count_label = f"0 match all selected genres, {partial_count} match some"
             context["result_count_label"] += " — " + genre_count_label
-        if exact_results and query_analysis["ranking_intent"] and not understanding.get("similar_to"):
+        if query_analysis["ranking_intent"] and not title_matches and not understanding.get("similar_to"):
             all_results.sort(key=lambda entry: (
                 ranking_key(entry, query_analysis["ranking_intent"]), entry["final_score"]
             ), reverse=True)
@@ -2015,6 +2542,9 @@ def index():
             "assistant_message": context["assistant_message"],
             "assistant_state": context["assistant_state"],
         })
+        _append_alternative_preference_tags(
+            context, alternate_interpretations, dropped,
+        )
         if not all_results:
             context["result_tier_counts"] = {"exact": 0, "close": 0, "related": 0}
             context["result_count_label"] = "0 exact, 0 close, 0 related"

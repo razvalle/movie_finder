@@ -14,9 +14,11 @@ from .extract import extract_preferences
 from .negation import find_negation_scopes, is_within_negation_scope
 from .normalize import normalize_text
 from .tokenize import tokenize
+from .catalog_matching import load_query_rules
 
 RANKING_PATTERNS = {
     "best": ("best", "top", "good", "great", "highest rated", "highly rated", "greatest"),
+    "worst": ("worst", "lowest rated", "lowest rating"),
     "popular": ("most popular", "popular", "trending"),
     "recommended": ("recommend", "recommended", "suggest"),
 }
@@ -27,25 +29,7 @@ EXPLICIT_SYNTAX_TOKENS = {
     "mins", "recent", "old", "new", "year", "years",
 }
 
-COUNTRY_ALIASES = {
-    "ph": "PH", "philippines": "PH", "philippine": "PH", "filipino": "PH", "filipina": "PH",
-    "pinoy": "PH", "pinas": "PH", "usa": "US", "us": "US", "us movies": "US",
-    "american": "US", "uk": "GB", "british": "GB", "english": "GB",
-    "indian": "IN", "japanese": "JP", "korean": "KR", "south korean": "KR",
-    "chinese": "CN", "french": "FR", "german": "DE", "italian": "IT",
-    "spanish": "ES", "mexican": "MX", "canadian": "CA", "australian": "AU",
-    "brazilian": "BR", "argentinian": "AR", "russian": "RU", "ukrainian": "UA",
-    "polish": "PL", "turkish": "TR", "dutch": "NL", "belgian": "BE",
-    "swedish": "SE", "danish": "DK", "norwegian": "NO", "finnish": "FI",
-    "irish": "IE", "scottish": "GB", "welsh": "GB", "new zealand": "NZ",
-    "south african": "ZA", "nigerian": "NG", "iranian": "IR", "israeli": "IL",
-    "thai": "TH", "vietnamese": "VN", "filipino": "PH", "indonesian": "ID",
-    "malaysian": "MY", "singaporean": "SG", "colombian": "CO", "chilean": "CL",
-    "peruvian": "PE", "czech": "CZ", "hungarian": "HU", "romanian": "RO",
-    "greek": "GR", "portuguese": "PT", "austrian": "AT", "swiss": "CH",
-    "icelandic": "IS", "uae": "AE", "jp": "JP", "jpn": "JP",
-    "sk": "KR", "kr": "KR",
-}
+COUNTRY_ALIASES = load_query_rules()["country_demonyms"]
 
 SHORT_COUNTRY_ALIASES = {"ph", "us", "uk", "jp", "jpn", "sk", "kr", "uae"}
 
@@ -93,7 +77,7 @@ def country_labels():
 
 COUNTRY_LABELS = country_labels()
 COUNTRY_PHRASES = {
-    normalize_text(name).replace(",", " ").strip(): code
+    " ".join(normalize_text(name).replace(",", " ").split()): code
     for code, name in COUNTRY_LABELS.items()
 }
 
@@ -106,6 +90,9 @@ def _remove_phrases(text, phrases):
 
 def detect_country(normalized_text):
     """Return a canonical ISO country code and matched phrase, when present."""
+    normalized_text = " ".join(
+        re.sub(r"\s*,\s*", " ", normalized_text).split()
+    )
     for phrase, code in sorted(COUNTRY_PHRASES.items(), key=lambda item: len(item[0]), reverse=True):
         if re.search(rf"\b(?:movies?|films?)\s+in\s+{re.escape(phrase)}\b", normalized_text):
             continue
@@ -160,7 +147,7 @@ def detect_people_and_language(normalized_text):
     """Extract requested people/language text without inventing unavailable metadata."""
     people = []
     patterns = (
-        r"\b(?:starring|directed by|written by)\s+([a-z][a-z .'-]+)",
+        r"\b(?:starring|with|directed by|written by)\s+([a-z][a-z .'-]+)",
         r"\b(?:actor|actress|director|writer)\s+([a-z][a-z'-]+(?:\s+[a-z][a-z'-]+)+)",
     )
     for pattern in patterns:
@@ -215,6 +202,16 @@ def build_structured_query(raw_query, content_text=None):
         cleaned = content_text
     preferences = extract_preferences(cleaned)
     cast_constraint = detect_cast_gender_constraint(normalized)
+    rules = load_query_rules()
+    audience_intents = []
+    audience_certification_limits = {}
+    for label, mapping in rules["audience_occasions"].items():
+        if any(re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", normalized) for phrase in mapping["phrases"]):
+            audience_intents.append(label)
+            preferences["genres"] = sorted(set(preferences["genres"]) | set(mapping["genres"]))
+            audience_certification_limits[label] = mapping.get("maximum_certification")
+    preferences["audience_intents"] = audience_intents
+    preferences["audience_certification_limits"] = audience_certification_limits
     if cast_constraint:
         preferences["cast_gender"] = cast_constraint
         preferences["free_text_keywords"] = []
@@ -247,12 +244,52 @@ def build_structured_query(raw_query, content_text=None):
         preferences["genres"] = sorted(set(preferences["genres"]) | {"horror"})
 
     people, languages = detect_people_and_language(normalized)
+    directors = re.findall(r"\bdirected by\s+([a-z][a-z .'-]+)", normalized)
+    writers = re.findall(r"\bwritten by\s+([a-z][a-z .'-]+)", normalized)
+    people = list(dict.fromkeys([*people, *directors, *writers]))
+    filtered_people = []
+    for person in people:
+        person_preferences = extract_preferences(person)
+        if not any((
+            person_preferences["genres"],
+            person_preferences["moods"],
+            person_preferences["themes"],
+        )) and not cast_constraint:
+            filtered_people.append(person)
+    people = filtered_people
+    entity_requests = []
+    entity_patterns = (
+        ("cast", r"\b(?:starring|with)\s+([^,.;!?]+?)(?=\s+(?:in|from|under|over|before|after|without|but|movie|movies|film|films)\b|$)"),
+        ("director", r"\bdirected by\s+([^,.;!?]+?)(?=\s+(?:in|from|under|over|before|after|without|but|movie|movies|film|films)\b|$)"),
+        ("writer", r"\bwritten by\s+([^,.;!?]+?)(?=\s+(?:in|from|under|over|before|after|without|but|movie|movies|film|films)\b|$)"),
+    )
+    for field, pattern in entity_patterns:
+        match = re.search(pattern, normalized)
+        if not match:
+            continue
+        value = match.group(1).strip()
+        parsed_value = extract_preferences(value)
+        if field == "cast" and (cast_constraint or any((
+            parsed_value["genres"], parsed_value["moods"], parsed_value["themes"],
+        ))):
+            continue
+        if value:
+            entity_requests.append({"field": field, "value": value})
     certification_match = re.search(
         r"\b(?:rated|rating|certification|certificate)\s+"
         r"(pg-?13|nc-?17|g|pg|r)\b",
         normalized,
     )
     certifications = [certification_match.group(1)] if certification_match else []
+    entity_requests.extend(
+        {"field": "language", "value": language}
+        for language in languages
+    )
+    entity_requests.extend(
+        {"field": "certification", "value": certification}
+        for certification in certifications
+    )
+    preferences["entity_requests"] = entity_requests
     return {
         "raw_query": raw_query,
         "normalized_query": normalized,
@@ -267,6 +304,8 @@ def build_structured_query(raw_query, content_text=None):
         "languages": languages,
         "unsupported_filters": {
             "people": people,
+            "directors": directors,
+            "writers": writers,
             "languages": languages,
             "certifications": certifications,
         },
@@ -282,5 +321,6 @@ def build_structured_query(raw_query, content_text=None):
             "people": people,
             "languages": languages,
             "cast_gender": preferences.get("cast_gender"),
+            "audience_intents": audience_intents,
         },
     }

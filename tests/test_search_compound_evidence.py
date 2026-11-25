@@ -129,8 +129,11 @@ class CompoundEvidenceTests(unittest.TestCase):
                 self.assertEqual(
                     build_structured_query(query)["unsupported_filters"]["languages"], [],
                 )
-                if query.startswith(("lunarorchard", "lunar-orchard")):
+                if query.startswith("lunarorchard"):
                     self.assertIn(b"Showing results for", response.data)
+                elif query.startswith("lunar-orchard"):
+                    self.assertNotIn(b"Showing results for", response.data)
+                    self.assertIn("Lunar Orchard", [card["title"] for card in cards])
         self.assertTrue(set.intersection(*ids_by_query))
         self.assertLessEqual(max(map(len, ids_by_query)) - min(map(len, ids_by_query)), 1)
 
