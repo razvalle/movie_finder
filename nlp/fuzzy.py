@@ -1,6 +1,15 @@
 """Conservative token correction for catalog-backed search."""
 
 import re
+from functools import lru_cache
+
+
+@lru_cache(maxsize=64)
+def _vocabulary_by_length(vocabulary):
+    buckets = {}
+    for candidate in vocabulary:
+        buckets.setdefault(len(candidate), set()).add(candidate)
+    return buckets
 
 
 def _edit_distance(left, right, limit):
@@ -55,7 +64,16 @@ def correct_unknown_token(
     if inflectional_forms & (vocabulary | protected | set(known_tokens)):
         return None
     distances = []
-    for candidate in vocabulary:
+    length_buckets = _vocabulary_by_length(tuple(sorted(vocabulary)))
+    candidate_buckets = (
+        candidate
+        for length in range(
+            max(0, len(normalized) - max_distance),
+            len(normalized) + max_distance + 1,
+        )
+        for candidate in length_buckets.get(length, ())
+    )
+    for candidate in candidate_buckets:
         if (
             candidate in protected
             or re.fullmatch(r"\d+(?:\.\d+)?|\d{2,4}s?", candidate)

@@ -1,4 +1,5 @@
 (() => {
+  const SEARCH_REQUEST_TIMEOUT_MS = 12000;
   const form = document.querySelector(".search__form");
   if (!form) return;
 
@@ -562,7 +563,7 @@
     setSearchLoading(true);
 
     timer = window.setTimeout(async () => {
-      const timeout = window.setTimeout(() => controller.abort(), 8000);
+      const timeout = window.setTimeout(() => controller.abort(), SEARCH_REQUEST_TIMEOUT_MS);
       try {
         const response = await fetch(url, {
           signal: controller.signal,

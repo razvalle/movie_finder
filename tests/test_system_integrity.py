@@ -179,6 +179,33 @@ class SystemIntegrityTests(unittest.TestCase):
             build_structured_query(query)
             self.assertLess(time.perf_counter() - started, 1.0)
 
+    def test_normal_search_warm_latency_targets(self):
+        query = "under 90 minutes, comedy, nothing else matters"
+        with patch("app.allow_search", return_value=True):
+            self.client.get("/", query_string={"q": "comedy"})
+            self.client.get("/", query_string={"q": query})
+            durations = []
+            for _ in range(20):
+                started = time.perf_counter()
+                response = self.client.get("/", query_string={"q": query})
+                durations.append((time.perf_counter() - started) * 1000)
+                self.assertEqual(response.status_code, 200)
+        durations.sort()
+        p50 = durations[9]
+        p95 = durations[18]
+        p99 = durations[19]
+        self.assertLess(p50, 150)
+        self.assertLess(p95, 400)
+        self.assertLess(p99, 1000)
+
+    def test_search_timeout_is_longer_than_server_budget(self):
+        from nlp.search_diagnostics import SEARCH_BUDGET_SECONDS
+        javascript = (
+            ROOT / "static" / "js" / "smart-search.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("const SEARCH_REQUEST_TIMEOUT_MS = 12000;", javascript)
+        self.assertGreater(12.0, SEARCH_BUDGET_SECONDS)
+
     def test_shared_chip_links_ignore_unlisted_parameters(self):
         tag = {"key": "genre:mystery", "label": "Genre", "value": "Mystery"}
         with app_module.app.test_request_context(

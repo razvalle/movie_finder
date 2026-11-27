@@ -23,6 +23,7 @@ import math
 import heapq
 import logging
 import json
+import time
 import unicodedata
 from collections import Counter
 from pathlib import Path
@@ -161,6 +162,7 @@ INDEX_FALLBACK_NOTICE = (
 TITLE_INDEX = {}
 TITLE_EXACT_INDEX = {}
 TITLE_TOKEN_INDEX = {}
+_NORMAL_SEARCH_HTML_CACHE = {}
 
 
 def _canonical_genre(value):
@@ -198,6 +200,13 @@ for movie in MOVIES:
 
 SERIES_GROUPS = derive_series_groups(MOVIES)
 RISKY_TITLE_VOCABULARY = title_risk_vocabulary(MOVIES)
+
+# Warm catalog-derived parser/template structures once per process so the first
+# user request does not pay the lazy-import and Jinja compilation cost.
+extract_preferences("")
+build_structured_query("")
+app.jinja_env.get_template("index.html")
+smart_search_module._get_bm25_index(MOVIES)
 
 
 @app.route("/health", methods=["GET"])
@@ -238,6 +247,7 @@ def _run_search_stage(name, operation, fallback, trace=None):
             trace.report_budget_exceeded(name)
             trace.fallback(name)
             return fallback
+    started = time.perf_counter()
     try:
         value = operation()
     except Exception as error:
@@ -245,6 +255,13 @@ def _run_search_stage(name, operation, fallback, trace=None):
             trace.error(name, error)
             trace.fallback(name)
         return fallback
+    finally:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        if trace is not None:
+            trace.stage_timings[name] = round(
+                trace.stage_timings.get(name, 0.0) + elapsed_ms,
+                3,
+            )
     if trace is not None and trace.budget_exceeded:
         trace.report_budget_exceeded(name)
         trace.fallback(name)
@@ -765,7 +782,7 @@ GENERIC_TITLE_TOKENS = {
 }
 
 
-def find_title_matches(query, movies):
+def _find_title_matches_uncached(query, movies):
     """Find titles written exactly or as a phrase inside a natural-language query."""
     normalized_query = _title_key(query)
     risky_words = TITLE_STOP_WORDS | {
@@ -834,7 +851,7 @@ def find_title_matches(query, movies):
     query_year = re.search(r"\b((?:18|19|20)\d{2})\b", str(query))
     query_year = int(query_year.group(1)) if query_year else None
 
-    groups = derive_series_groups(movies)
+    groups = SERIES_GROUPS if movies is MOVIES else derive_series_groups(movies)
     for group in groups:
         members = [
             movie for movie in movies
@@ -901,7 +918,7 @@ def find_title_matches(query, movies):
             ))
         return list({str(movie["id"]): movie for movie in exact_matches}.values())
 
-    groups = derive_series_groups(movies)
+    groups = SERIES_GROUPS if movies is MOVIES else derive_series_groups(movies)
     for group in groups:
         base_candidates = {
             normalize_title(title)
@@ -1094,6 +1111,27 @@ def find_title_matches(query, movies):
         movie for movie in matches
         if len(_title_key(movie["title"]).split()) == longest_title_length
     ]
+
+
+_FIND_TITLE_MATCH_CACHE = {}
+
+
+def find_title_matches(query, movies):
+    cache_key = (
+        CATALOG_VERSION["record_count"],
+        CATALOG_VERSION["content_hash"],
+        normalize_text(str(query or "")),
+        id(movies),
+    )
+    cached = _FIND_TITLE_MATCH_CACHE.get(cache_key)
+    if cached is not None:
+        return list(cached)
+    matches = tuple(_find_title_matches_uncached(query, movies))
+    if len(_FIND_TITLE_MATCH_CACHE) >= 512:
+        oldest_key = next(iter(_FIND_TITLE_MATCH_CACHE))
+        del _FIND_TITLE_MATCH_CACHE[oldest_key]
+    _FIND_TITLE_MATCH_CACHE[cache_key] = matches
+    return list(matches)
 
 
 def _filter_entity_title_spans(query, spans):
@@ -1671,6 +1709,17 @@ def index():
     )
     if query and not allow_search(request.remote_addr or "unknown"):
         return "Search limit reached. Please wait a minute and try again.", 429
+    normal_search_args = set(request.args.keys()) == {"q"}
+    html_cache_key = None
+    if query and normal_search_args:
+        html_cache_key = (
+            CATALOG_VERSION["record_count"],
+            CATALOG_VERSION["content_hash"],
+            normalize_text(query).casefold(),
+        )
+        cached_html = _NORMAL_SEARCH_HTML_CACHE.get(html_cache_key)
+        if cached_html is not None:
+            return make_response(cached_html)
     like_source_text = find_like_source_text(query) if query else None
     like_source_movie, like_title_suggestions = (
         resolve_like_title(query, MOVIES) if like_source_text else (None, [])
@@ -2139,7 +2188,17 @@ def index():
             })
             if trace is not None:
                 trace.stage = "render"
-            return render_template("index.html", **context)
+            rendered = render_template("index.html", **context)
+            if (
+                html_cache_key is not None
+                and "may be incomplete" not in str(context.get("search_notice", "")).casefold()
+                and "partial" not in str(context.get("search_notice", "")).casefold()
+            ):
+                if len(_NORMAL_SEARCH_HTML_CACHE) >= 512:
+                    oldest_key = next(iter(_NORMAL_SEARCH_HTML_CACHE))
+                    del _NORMAL_SEARCH_HTML_CACHE[oldest_key]
+                _NORMAL_SEARCH_HTML_CACHE[html_cache_key] = rendered
+            return rendered
         unsupported = query_analysis["unsupported_filters"]
         unsupported_requests = []
         requested_fields = []
@@ -2203,7 +2262,17 @@ def index():
                     context["assistant_message"] += " " + notice
             if trace is not None:
                 trace.stage = "render"
-            return render_template("index.html", **context)
+            rendered = render_template("index.html", **context)
+            if (
+                html_cache_key is not None
+                and "may be incomplete" not in str(context.get("search_notice", "")).casefold()
+                and "may be incomplete" not in str(context.get("assistant_message", "")).casefold()
+            ):
+                if len(_NORMAL_SEARCH_HTML_CACHE) >= 512:
+                    oldest_key = next(iter(_NORMAL_SEARCH_HTML_CACHE))
+                    del _NORMAL_SEARCH_HTML_CACHE[oldest_key]
+                _NORMAL_SEARCH_HTML_CACHE[html_cache_key] = rendered
+            return rendered
         preferences = query_preferences
         cast_constraint = preferences.get("cast_gender")
         negative_cast_constraint = bool(
@@ -2950,7 +3019,17 @@ def index():
                 context["assistant_message"] = (
                     context.get("assistant_message", "") + " " + partial_notice
                 ).strip()
-    return render_template("index.html", **context)
+    rendered = render_template("index.html", **context)
+    if (
+        html_cache_key is not None
+        and "may be incomplete" not in str(context.get("search_notice", "")).casefold()
+        and "may be incomplete" not in str(context.get("assistant_message", "")).casefold()
+    ):
+        if len(_NORMAL_SEARCH_HTML_CACHE) >= 512:
+            oldest_key = next(iter(_NORMAL_SEARCH_HTML_CACHE))
+            del _NORMAL_SEARCH_HTML_CACHE[oldest_key]
+        _NORMAL_SEARCH_HTML_CACHE[html_cache_key] = rendered
+    return rendered
 
 
 SUGGESTION_TITLE_LIMIT = 50_000

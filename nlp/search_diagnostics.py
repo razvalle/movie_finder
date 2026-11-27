@@ -14,7 +14,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_LOG_PATH = ROOT_DIR / "data" / "search_quality.jsonl"
 MAX_LOG_BYTES = 2 * 1024 * 1024
 BACKUP_COUNT = 3
-SEARCH_BUDGET_SECONDS = 8.0
+SEARCH_BUDGET_SECONDS = 10.0
 _LOGGER_LOCK = threading.Lock()
 _LOGGERS = {}
 
@@ -46,6 +46,7 @@ class SearchTrace:
         self.result_scores = []
         self.top_score = None
         self.zero_result = False
+        self.stage_timings = {}
         self._budget_reported = False
 
     @property
@@ -119,6 +120,7 @@ class SearchTrace:
             "fallback_used": bool(self.fallbacks),
             "fallbacks": self.fallbacks,
             "duration_ms": round(self.elapsed_seconds * 1000, 3),
+            "stage_timings_ms": dict(sorted(self.stage_timings.items())),
             "status_code": int(status_code),
         }
 

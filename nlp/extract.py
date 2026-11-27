@@ -20,6 +20,7 @@ user text into a structured preference dict:
 """
 
 import math
+import copy
 from collections import defaultdict
 from functools import lru_cache
 
@@ -268,7 +269,7 @@ def fuzzy_synonym_hit(phrase):
     return fuzzy_synonym_match(phrase)[0]
 
 
-def extract_preferences(raw_input, allow_fuzzy_correction=True):
+def _extract_preferences_uncached(raw_input, allow_fuzzy_correction=True):
     normalized_text = normalize_text(raw_input)
     tokens = tokenize(normalized_text)
     negation_scopes = find_negation_scopes(tokens)
@@ -463,3 +464,21 @@ def extract_preferences(raw_input, allow_fuzzy_correction=True):
         "free_text_keywords": free_text_keywords,
         "negation_scopes": negation_scopes,
     }
+
+
+_EXTRACT_PREFERENCES_CACHE = {}
+
+
+def extract_preferences(raw_input, allow_fuzzy_correction=True):
+    cache_key = (str(raw_input), bool(allow_fuzzy_correction))
+    cached = _EXTRACT_PREFERENCES_CACHE.get(cache_key)
+    if cached is None:
+        cached = _extract_preferences_uncached(
+            raw_input,
+            allow_fuzzy_correction=allow_fuzzy_correction,
+        )
+        if len(_EXTRACT_PREFERENCES_CACHE) >= 4096:
+            oldest_key = next(iter(_EXTRACT_PREFERENCES_CACHE))
+            del _EXTRACT_PREFERENCES_CACHE[oldest_key]
+        _EXTRACT_PREFERENCES_CACHE[cache_key] = copy.deepcopy(cached)
+    return copy.deepcopy(cached)

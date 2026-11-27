@@ -5,6 +5,7 @@ filters from the residual semantic description before scoring the catalog.
 """
 
 import re
+import copy
 from datetime import date
 from functools import lru_cache
 
@@ -250,7 +251,7 @@ def detect_cast_gender_constraint(normalized_text):
     return None
 
 
-def build_structured_query(raw_query, content_text=None, allow_fuzzy_correction=True):
+def _build_structured_query_uncached(raw_query, content_text=None, allow_fuzzy_correction=True):
     """Return the explicit filters, ranking intent, and semantic residual text."""
     normalized = normalize_text(raw_query).replace(",", " ")
     country, country_phrase = detect_country(normalized)
@@ -397,3 +398,26 @@ def build_structured_query(raw_query, content_text=None, allow_fuzzy_correction=
             "audience_intents": audience_intents,
         },
     }
+
+
+_BUILD_STRUCTURED_QUERY_CACHE = {}
+
+
+def build_structured_query(raw_query, content_text=None, allow_fuzzy_correction=True):
+    cache_key = (
+        str(raw_query),
+        None if content_text is None else str(content_text),
+        bool(allow_fuzzy_correction),
+    )
+    cached = _BUILD_STRUCTURED_QUERY_CACHE.get(cache_key)
+    if cached is None:
+        cached = _build_structured_query_uncached(
+            raw_query,
+            content_text=content_text,
+            allow_fuzzy_correction=allow_fuzzy_correction,
+        )
+        if len(_BUILD_STRUCTURED_QUERY_CACHE) >= 4096:
+            oldest_key = next(iter(_BUILD_STRUCTURED_QUERY_CACHE))
+            del _BUILD_STRUCTURED_QUERY_CACHE[oldest_key]
+        _BUILD_STRUCTURED_QUERY_CACHE[cache_key] = copy.deepcopy(cached)
+    return copy.deepcopy(cached)
