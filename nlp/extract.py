@@ -21,6 +21,7 @@ user text into a structured preference dict:
 
 import math
 import copy
+import re
 from collections import defaultdict
 from functools import lru_cache
 
@@ -36,6 +37,7 @@ from .negation import (
 )
 from .runtime import WORD_NUMBERS, extract_runtime_constraint, extract_vague_runtime_constraint
 from .release_year import extract_release_year_constraint
+from .catalog_matching import load_query_rules
 from data.synonyms import (
     CONTENT_DESCRIPTOR_SYNONYMS,
     GENRE_SYNONYMS,
@@ -51,12 +53,32 @@ NEGATION_SYNTAX_TOKENS = {
     "minute", "minutes", "more", "over", "shorter", "than", "under", "within",
 }
 NEGATION_CUE_WORDS = NEGATION_CUES | {"but"}
+NON_INFORMATIVE_PHRASES = tuple(load_query_rules()["non_informative_phrases"])
 _SYNONYM_TABLES = (
     ("genre", GENRE_SYNONYMS),
     ("mood", MOOD_SYNONYMS),
     ("theme", THEME_SYNONYMS),
     ("content_descriptor", CONTENT_DESCRIPTOR_SYNONYMS),
 )
+
+
+def strip_non_informative_phrases(value):
+    text = normalize_text(value)
+    for phrase in sorted(NON_INFORMATIVE_PHRASES, key=len, reverse=True):
+        normalized_phrase = normalize_text(phrase)
+        pattern = re.compile(
+            rf"(?<!\w){re.escape(normalized_phrase)}(?!\w)",
+            flags=re.UNICODE,
+        )
+
+        def replace(match):
+            following = re.match(r"\s*([a-z0-9]+)", text[match.end():])
+            if following and following.group(1) in NEGATION_CUE_WORDS:
+                return match.group(0)
+            return " "
+
+        text = pattern.sub(replace, text)
+    return " ".join(text.split())
 
 
 @lru_cache(maxsize=1)
@@ -270,7 +292,7 @@ def fuzzy_synonym_hit(phrase):
 
 
 def _extract_preferences_uncached(raw_input, allow_fuzzy_correction=True):
-    normalized_text = normalize_text(raw_input)
+    normalized_text = strip_non_informative_phrases(raw_input)
     tokens = tokenize(normalized_text)
     negation_scopes = find_negation_scopes(tokens)
     soft_negation_scopes = find_soft_negation_scopes(tokens)
@@ -385,7 +407,7 @@ def _extract_preferences_uncached(raw_input, allow_fuzzy_correction=True):
         for k in range(start, end + 1):
             claimed_indices.add(k)
 
-    runtime = extract_runtime_constraint(raw_input)
+    runtime = extract_runtime_constraint(normalized_text)
     if not any(runtime[key] is not None for key in ("min", "max", "target")):
         from data.movies import MOVIES
 
@@ -393,6 +415,9 @@ def _extract_preferences_uncached(raw_input, allow_fuzzy_correction=True):
             normalized_text,
             [movie.get("runtime", 0) for movie in MOVIES],
         ) or runtime
+    has_runtime_constraint = any(
+        runtime[key] is not None for key in ("min", "max", "target")
+    )
     release_year = extract_release_year_constraint(normalized_text)
     numeric_negation_cues = {"not", "no", "without", "except", "excluding", "avoid", "avoiding", "skip", "but"}
     for index, token in enumerate(tokens):
@@ -430,6 +455,12 @@ def _extract_preferences_uncached(raw_input, allow_fuzzy_correction=True):
     free_text_keywords = [
         token for token in remove_stopwords(leftover_tokens)
         if token not in excluded_keywords
+        and (
+            not has_runtime_constraint
+            or token not in NEGATION_SYNTAX_TOKENS
+            and token not in WORD_NUMBERS
+            and not token.isdigit()
+        )
     ]
     has_standalone_no_thanks = any(
         tokens[index:index + 2] == ["no", "thanks"]

@@ -30,11 +30,12 @@ from .concepts import (
     load_concept_table,
     normalize_phrase,
 )
+from .extract import strip_non_informative_phrases
 from .fuzzy import correct_unknown_token
 from .normalize import normalize_text
 from .query import EXPLICIT_SYNTAX_TOKENS, build_structured_query
 from .runtime import WORD_NUMBERS
-from .scoring import is_excluded
+from .scoring import _movie_contains_concept, is_excluded
 from .similarity import cosine_similarity, vector_norm
 from .tfidf import build_tfidf_model, simple_word_tokens, vectorize_query
 from .catalog_matching import normalize_title
@@ -325,8 +326,9 @@ def _sanitize_filters(value):
 
 def local_understanding(raw_query, exact_search=False):
     """Interpret a query with the project's deterministic NLP rules."""
+    clean_query = strip_non_informative_phrases(raw_query)
     structured = build_structured_query(
-        raw_query,
+        clean_query,
         allow_fuzzy_correction=not exact_search,
     )
     preferences = structured["preferences"]
@@ -344,15 +346,15 @@ def local_understanding(raw_query, exact_search=False):
         keywords = [keyword for keyword in keywords if keyword not in WORD_NUMBERS]
     no_twist_ending = bool(re.search(
         r"\b(?:not|no|without|avoid|avoiding)\s+(?:a\s+|any\s+)?twist\b|\bending\s+(?:is\s+)?not\s+(?:a\s+)?twist\b",
-        normalize_text(raw_query),
+        normalize_text(clean_query),
     ))
     if no_twist_ending:
         keywords = [keyword for keyword in keywords if keyword not in {"twist", "twisty"}]
-    animal_only = bool(re.search(r"\b(?:only|just)\s+animals?\b", normalize_text(raw_query)))
-    silent_request = bool(re.search(r"\bsilent(?:\s+(?:film|movie))?\b", normalize_text(raw_query)))
-    black_and_white_request = bool(re.search(r"\bblack\s+and\s+white\b|\bblack-and-white\b", normalize_text(raw_query)))
+    animal_only = bool(re.search(r"\b(?:only|just)\s+animals?\b", normalize_text(clean_query)))
+    silent_request = bool(re.search(r"\bsilent(?:\s+(?:film|movie))?\b", normalize_text(clean_query)))
+    black_and_white_request = bool(re.search(r"\bblack\s+and\s+white\b|\bblack-and-white\b", normalize_text(clean_query)))
     concepts = []
-    normalized = normalize_text(raw_query)
+    normalized = normalize_text(clean_query)
     road_trip_request = bool(re.search(r"\broad(?:\s+|-)?trip\b", normalized))
     for item in LOCAL_CONCEPTS:
         if re.search(item["pattern"], normalized, re.IGNORECASE):
@@ -383,6 +385,7 @@ def local_understanding(raw_query, exact_search=False):
         "example_titles": [],
         "genres": preferences["genres"],
         "mood_tone": preferences["moods"],
+        "theme_tags": preferences["themes"],
         "year_range": {"from": year.get("min"), "to": year.get("max")},
         "min_rating": None,
         "similar_to": similar_to_title,
@@ -546,11 +549,14 @@ def _split_unknown_word(word, word_support):
 
 
 def _normalize_query_concepts(raw_query, understanding, movies):
+    raw_query = strip_non_informative_phrases(raw_query)
     required = understanding.get("required_terms") or []
     if required:
         source_terms = required
     else:
-        structured_terms = set(understanding.get("genres", [])) | set(understanding.get("mood_tone", []))
+        structured_terms = set(understanding.get("genres", [])) | set(
+            understanding.get("mood_tone", [])
+        )
         exclusions = _negative_query_terms(understanding)
         source_terms = [
             token for token in _text_tokens(_remove_negated_concepts(raw_query))
@@ -844,8 +850,9 @@ def _constraint_words(understanding):
 
 
 def _query_terms(raw_query, understanding):
+    clean_query = strip_non_informative_phrases(raw_query)
     sources = [
-        _remove_negated_concepts(raw_query),
+        _remove_negated_concepts(clean_query),
         _remove_negated_concepts(understanding.get("core_intent", "")),
         *understanding.get("keywords", []),
         *understanding.get("expanded_concepts", []),
@@ -888,6 +895,7 @@ def _raw_query_terms(raw_query):
 
 
 def _raw_query_terms_from_understanding(raw_query, understanding):
+    raw_query = strip_non_informative_phrases(raw_query)
     constraint_words = _constraint_words(understanding)
     negative_terms = _negative_query_terms(understanding)
     return list(dict.fromkeys(
@@ -1272,11 +1280,13 @@ def retrieve_plain_candidates(raw_query, understanding, movies, tfidf_model=None
     direct_understanding = dict(understanding or {})
     direct_understanding["expanded_concepts"] = []
     direct_understanding["keywords"] = []
-    terms = _query_terms(raw_query[:MAX_QUERY_LENGTH], direct_understanding)
+    clean_query = strip_non_informative_phrases(raw_query[:MAX_QUERY_LENGTH])
+    terms = _query_terms(clean_query, direct_understanding)
     if not terms:
         terms = [
-            term for term in _text_tokens(_remove_negated_concepts(raw_query[:MAX_QUERY_LENGTH]))
-            if term not in STOP_WORDS and term not in EXPLICIT_SYNTAX_TOKENS and len(term) > 1
+            term for term in _text_tokens(_remove_negated_concepts(clean_query))
+            if term not in STOP_WORDS and term not in EXPLICIT_SYNTAX_TOKENS
+            and len(term) > 1
         ]
     scores = {}
     fuzzy_mapping = {term: term for term in terms}
@@ -1387,7 +1397,6 @@ def _basic_assessment(raw_query, candidate, understanding):
     satisfied = []
     unsatisfied = []
     unverifiable = []
-    movie_terms = set(simple_word_tokens(_movie_text(movie)))
     filters = understanding.get("filters", {})
     year_range = filters.get("year_range", {})
     lower_year = year_range.get("from")
@@ -1412,6 +1421,18 @@ def _basic_assessment(raw_query, candidate, understanding):
             satisfied.append(f"{genre} genre")
         else:
             unsatisfied.append(f"{genre} genre")
+
+    for values, movie_field, synonym_table, label in (
+        (understanding.get("mood_tone", filters.get("moods", [])), "mood_tags", MOOD_SYNONYMS, "mood"),
+        (understanding.get("theme_tags", filters.get("themes", [])), "themes", THEME_SYNONYMS, "theme"),
+    ):
+        for value in values:
+            if _movie_contains_concept(movie, value, synonym_table):
+                satisfied.append(f"{value} {label}")
+            elif movie.get(movie_field):
+                unsatisfied.append(f"{value} {label}")
+            else:
+                unverifiable.append(f"{value} {label}")
 
     runtime = filters.get("runtime", {})
     runtime_min, runtime_max = runtime.get("min"), runtime.get("max")
@@ -1496,7 +1517,13 @@ def _basic_assessment(raw_query, candidate, understanding):
     matched_phrases = {detail["phrase"] for detail in query_evidence.get("details", [])}
     for phrase in requirements:
         if phrase not in matched_phrases:
-            unverifiable.append(f"keyword {phrase}")
+            searchable_fields = (
+                movie.get("synopsis") or movie.get("overview")
+                or movie.get("tagline") or movie.get("genres")
+                or movie.get("themes") or movie.get("keywords")
+            )
+            target = unsatisfied if searchable_fields else unverifiable
+            target.append(f"keyword {phrase}")
 
     reason_parts = []
     if satisfied:
@@ -1540,7 +1567,6 @@ def _basic_assessment(raw_query, candidate, understanding):
     required_terms_supported = query_evidence.get("strong", True)
     eligible_for_full = (
         checked and not unsatisfied and not unverifiable and required_terms_supported
-        and not candidate.get("fallback_only")
     )
     exact = eligible_for_full and estimated_percent >= EXACT_MATCH_THRESHOLD
     match_tier = (
@@ -1561,8 +1587,7 @@ def _basic_assessment(raw_query, candidate, understanding):
         "confidence": min(95, 25 + round(query_evidence.get("score", 0.0) * 55) + 5 * len(satisfied)),
         "match_reason": reason,
         "verification_fallback": bool(
-            candidate.get("fallback_only")
-            or any(not item.startswith("strong evidence for ") for item in unverifiable)
+            any(not item.startswith("strong evidence for ") for item in unverifiable)
         ),
     }
 
@@ -1600,7 +1625,7 @@ def rerank_candidates(raw_query, candidates, understanding=None, on_error=None):
                 "match_level": "partial",
                 "match_tier": "close",
                 "match_eligible": False,
-                "estimated_percent": 0,
+                "estimated_percent": None,
                 "evidence_strength": 0.0,
                 "satisfied": [],
                 "unsatisfied": [],

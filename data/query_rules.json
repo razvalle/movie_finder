@@ -5,6 +5,10 @@
     "instead of", "rather than", "free of", "free from", "-free", "non-",
     "walang", "huwag", "wag", "ayaw", "ayoko", "hindi", "bawal"
   ],
+  "non_informative_phrases": [
+    "nothing else matters", "that's all", "nothing else", "anything else",
+    "whatever", "anything", "no preference", "surprise me", "i don't care"
+  ],
   "soft_degree_words": [
     "too", "very", "overly", "much", "super", "extremely"
   ],

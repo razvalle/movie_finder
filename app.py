@@ -239,14 +239,20 @@ PER_PAGE_OPTIONS = (12, 24, 48)
 DEFAULT_PER_PAGE = 12
 
 
-def _run_search_stage(name, operation, fallback, trace=None):
+def _run_search_stage(
+    name, operation, fallback, trace=None, *, complete_after_budget=False,
+    fallback_factory=None,
+):
     trace = trace or getattr(g, "search_trace", None)
+    if trace is not None and trace.budget_exceeded and not complete_after_budget:
+        trace.stage = name
+        trace.report_budget_exceeded(name)
+        trace.fallback(name)
+        return fallback
     if trace is not None:
         trace.stage = name
         if trace.budget_exceeded:
             trace.report_budget_exceeded(name)
-            trace.fallback(name)
-            return fallback
     started = time.perf_counter()
     try:
         value = operation()
@@ -254,6 +260,8 @@ def _run_search_stage(name, operation, fallback, trace=None):
         if trace is not None:
             trace.error(name, error)
             trace.fallback(name)
+        if fallback_factory is not None:
+            return fallback_factory()
         return fallback
     finally:
         elapsed_ms = (time.perf_counter() - started) * 1000
@@ -262,10 +270,12 @@ def _run_search_stage(name, operation, fallback, trace=None):
                 trace.stage_timings.get(name, 0.0) + elapsed_ms,
                 3,
             )
-    if trace is not None and trace.budget_exceeded:
+    if trace is not None and trace.budget_exceeded and not complete_after_budget:
         trace.report_budget_exceeded(name)
         trace.fallback(name)
         return fallback
+    if trace is not None and trace.budget_exceeded:
+        trace.report_budget_exceeded(name)
     return value
 
 
@@ -1554,31 +1564,6 @@ def _result_tier_counts(results):
     return counts
 
 
-def _unverified_candidates(candidates):
-    results = []
-    for candidate in candidates[:MAX_CANDIDATES]:
-        item = copy.deepcopy(candidate)
-        item.update({
-            "match_level": "partial",
-            "match_tier": "close",
-            "match_eligible": False,
-            "estimated_percent": 0,
-            "evidence_strength": 0.0,
-            "satisfied": [],
-            "unsatisfied": [],
-            "unverifiable": ["catalog evidence could not be verified"],
-            "confidence": 0,
-            "verification_fallback": True,
-            "fallback_only": True,
-        })
-        item.setdefault(
-            "match_reason",
-            "Shown as a closest alternative because evidence could not be verified.",
-        )
-        results.append(item)
-    return results
-
-
 def _topic_support_index():
     global _TOPIC_SUPPORT_SOURCE, _TOPIC_SUPPORT
     if _TOPIC_SUPPORT_SOURCE is MOVIES:
@@ -2481,16 +2466,21 @@ def index():
             verification_understanding["title_match_ids"] = [
                 str(movie["id"]) for movie in title_matches
             ]
-        candidates = _run_search_stage(
-            "verify-rerank",
-            lambda: rerank_candidates(
+        def verify_candidates():
+            return rerank_candidates(
                 query,
                 candidates,
                 verification_understanding,
                 on_error=trace.error if trace is not None else None,
-            ),
-            _unverified_candidates(candidates),
+            )
+
+        candidates = _run_search_stage(
+            "verify-rerank",
+            verify_candidates,
+            None,
             trace,
+            complete_after_budget=True,
+            fallback_factory=verify_candidates,
         )
         for candidate in candidates:
             checks = filter_status_by_movie_id.get(
@@ -2515,7 +2505,10 @@ def index():
             item.get("normalized_terms") for item in candidates
             if item.get("normalized_terms")
         ), None)
-        if normalized_terms:
+        if normalized_terms and (
+            scoring_preferences.get("free_text_keywords")
+            or scoring_preferences.get("ambiguous_interpretations")
+        ):
             scoring_preferences["free_text_keywords"] = normalized_terms
         evidence_by_id = {
             str(item["movie"]["id"]): item.get("query_evidence")
@@ -2525,25 +2518,23 @@ def index():
             str(item["movie"]["id"]): item.get("relevance_score")
             for item in candidates if item.get("relevance_score") is not None
         }
-        ranking = _run_search_stage(
-            "score",
-            lambda: rank_movies(
+        def score_candidates():
+            return rank_movies(
                 candidate_movies,
                 scoring_preferences,
                 TFIDF_MODEL,
                 evidence_by_id=evidence_by_id,
                 relevance_by_id=relevance_by_id,
                 apply_filters=False,
-            ),
-            {
-                "results": [{
-                    "movie": item["movie"],
-                    "percent": 0,
-                    "breakdown": {},
-                } for item in candidates],
-                "excluded_count": 0,
-            },
+            )
+
+        ranking = _run_search_stage(
+            "score",
+            score_candidates,
+            None,
             trace,
+            complete_after_budget=True,
+            fallback_factory=score_candidates,
         )
         candidate_by_id = {str(item["movie"]["id"]): item for item in candidates}
         all_results = ranking["results"]
@@ -2579,7 +2570,6 @@ def index():
             candidate["match_level"] = (
                 "full"
                 if candidate.get("match_eligible")
-                and not candidate.get("fallback_only")
                 and entry["percent"] >= EXACT_MATCH_THRESHOLD
                 else "partial"
             )
@@ -2638,7 +2628,6 @@ def index():
                 or not candidate.get("match_eligible")
                 or candidate.get("unsatisfied")
                 or candidate.get("unverifiable")
-                or candidate.get("fallback_only")
             ) and str(movie["id"]) not in title_match_ids:
                 entry["match_level"] = "partial"
                 entry["match_tier"] = "close"

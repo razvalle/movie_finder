@@ -9,16 +9,18 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import movie_matches_runtime_limits
+from app import _run_search_stage, movie_matches_runtime_limits
 from data.movies import _restore_curated_search_metadata, normalize_movie_record
 from data.synonyms import CONTENT_DESCRIPTOR_SYNONYMS, GENRE_SYNONYMS, MOOD_SYNONYMS, THEME_SYNONYMS
 from nlp.extract import extract_preferences
 from nlp.query import build_structured_query
+from nlp.search_diagnostics import SearchTrace
 from nlp.scoring import (
     evaluate_movie_constraints,
     evaluate_runtime_status,
     is_excluded,
     rank_movies,
+    score_movie,
 )
 from nlp.smart_search import (
     _BM25_CACHE,
@@ -139,6 +141,54 @@ class RuntimeConstraintTests(unittest.TestCase):
         result = _basic_assessment("drama under 100 minutes", {"movie": movie(3, "Unknown", "A drama.", 0)}, parsed)
         self.assertEqual(result["match_level"], "partial")
         self.assertIn("requested runtime", result["unsatisfied"])
+
+    def test_fillers_leave_constraints_and_no_required_text(self):
+        query = "under 90 minutes, comedy, nothing else matters"
+        preferences = extract_preferences(query)
+        structured = build_structured_query(query)["preferences"]
+        negated = extract_preferences("anything but horror")
+
+        self.assertEqual(preferences["free_text_keywords"], [])
+        self.assertEqual(preferences["negation_scopes"], [])
+        self.assertEqual(preferences["runtime"]["max"], 89)
+        self.assertEqual(structured["genres"], ["comedy"])
+        self.assertEqual(structured["free_text_keywords"], [])
+        self.assertIn("genre:horror", negated["soft_exclusions"])
+
+    def test_constraint_scores_and_verification_survive_expired_budget(self):
+        query = "under 90 minutes, comedy, nothing else matters"
+        record = movie(
+            "synthetic-comedy", "Synthetic Comedy", "A light synthetic story.", 87,
+        )
+        record["genres"] = ["comedy"]
+        preferences = build_structured_query(query)["preferences"]
+        preferences["excluded_genres"] = ["horror"]
+        understanding = local_understanding(query)
+        candidate = {"movie": record, "fallback_only": True}
+
+        assessment = _basic_assessment(query, candidate, understanding)
+        self.assertEqual(assessment["match_tier"], "exact")
+        self.assertEqual(assessment["estimated_percent"], 100)
+        self.assertEqual(assessment["unverifiable"], [])
+
+        model = build_tfidf_model([record])
+        scored = score_movie(record, preferences, model)
+        self.assertEqual(scored["percent"], 100)
+        self.assertEqual(scored["breakdown"]["exclusions"], 1.0)
+
+        trace = SearchTrace(query, budget_seconds=0)
+        result = _run_search_stage(
+            "score",
+            lambda: rank_movies([record], preferences, model),
+            {"results": [{"percent": 0}]},
+            trace,
+            complete_after_budget=True,
+            fallback_factory=lambda: {"results": [{"percent": 0}]},
+        )
+        self.assertEqual(result["results"][0]["percent"], 100)
+        self.assertEqual(result["results"][0]["constraint_status"], "satisfied")
+        self.assertFalse(result["results"][0]["unverified"])
+        self.assertTrue(trace.errors)
 
 
 class UnknownConstraintTests(unittest.TestCase):
@@ -485,13 +535,14 @@ class RequiredKeywordTests(unittest.TestCase):
         self.assertTrue(candidates)
         self.assertEqual([item["movie"]["id"] for item in candidates], [1])
 
-    def test_missing_required_term_is_unverified_not_full(self):
+    def test_missing_required_term_with_text_data_is_unsatisfied_not_unverified(self):
         query = "drama film about harbor"
         understanding = local_understanding(query)
         result = _basic_assessment(query, {"movie": movie(2, "City Stories", "A drama about a city.")}, understanding)
         self.assertEqual(result["match_level"], "partial")
-        self.assertIn("keyword harbor", result["unverifiable"])
-        self.assertTrue(result["verification_fallback"])
+        self.assertIn("keyword harbor", result["unsatisfied"])
+        self.assertNotIn("keyword harbor", result["unverifiable"])
+        self.assertFalse(result["verification_fallback"])
 
 
 if __name__ == "__main__":

@@ -32,8 +32,8 @@ from data.synonyms import (
 from .similarity import cosine_similarity, vector_norm
 from .tfidf import vectorize_query
 
-# Base weights when ALL categories are present in the query. Re-normalized
-# per-query based on which categories were actually detected.
+# Base weights for requested constraints and evidence. Only active factors are
+# used, and their weights are renormalized for each query.
 BASE_WEIGHTS = {
     "genre": 0.28,
     "mood": 0.24,
@@ -41,6 +41,7 @@ BASE_WEIGHTS = {
     "keyword": 0.16,  # TF-IDF/cosine similarity against free-text description
     "runtime": 0.12,
     "release_year": 0.06,
+    "exclusions": 0.18,
     "evidence": 0.68,
     "search": 0.10,
 }
@@ -368,7 +369,7 @@ def evaluate_movie_constraints(movie, preferences, active_genres=None):
 
 def score_movie(
     movie, preferences, tfidf_model, query_vector=None, query_norm=None,
-    query_evidence=None, relevance_score=None,
+    query_evidence=None, relevance_score=None, constraint_result=None,
 ):
     """
     Scores a single movie against extracted preferences.
@@ -391,8 +392,35 @@ def score_movie(
     year_score = score_release_year(
         preferences["release_year"], movie.get("release_year"),
     )
+    exclusion_score = None
+    has_exclusions = any(
+        preferences.get(key)
+        for key in (
+            "excluded_genres", "excluded_moods", "excluded_themes",
+            "excluded_content_descriptors", "excluded_keywords",
+        )
+    )
+    if has_exclusions:
+        constraint_result = constraint_result or evaluate_movie_constraints(
+            movie, preferences,
+        )
+        exclusion_status = next(
+            (
+                check["status"] for check in constraint_result["checks"]
+                if check["constraint"] == "exclusions"
+            ),
+            None,
+        )
+        exclusion_score = {
+            "satisfied": 1.0,
+            "violated": 0.0,
+        }.get(exclusion_status)
+    has_content_terms = bool(
+        preferences.get("free_text_keywords")
+        or preferences.get("ambiguous_interpretations")
+    )
     has_query_evidence = bool(
-        query_evidence
+        has_content_terms and query_evidence
         and (query_evidence.get("details") or query_evidence.get("associated_details"))
     )
 
@@ -407,9 +435,9 @@ def score_movie(
 
     evidence_score = None
     search_score = None
-    if has_query_evidence:
+    if has_content_terms and has_query_evidence:
         evidence_score = query_evidence.get("score", 0.0)
-    if relevance_score is not None and relevance_score > 0:
+    if has_content_terms and relevance_score is not None and relevance_score > 0:
         search_score = relevance_score / (1 + relevance_score)
         if has_query_evidence:
             search_score *= query_evidence.get("strength", 0.0)
@@ -421,6 +449,7 @@ def score_movie(
         "keyword": keyword_score,
         "runtime": runtime_score,
         "release_year": year_score,
+        "exclusions": exclusion_score,
         "evidence": evidence_score,
         "search": search_score,
     }
@@ -455,6 +484,7 @@ def score_movie(
             "keyword": keyword_score,
             "runtime": runtime_score,
             "release_year": year_score,
+            "exclusions": exclusion_score,
             "evidence": evidence_score,
             "search": search_score,
         },
@@ -488,6 +518,7 @@ def rank_movies(
             movie, preferences, tfidf_model, query_vector, query_norm,
             (evidence_by_id or {}).get(str(movie_id), (evidence_by_id or {}).get(movie_id)),
             (relevance_by_id or {}).get(str(movie_id), (relevance_by_id or {}).get(movie_id)),
+            constraint_result,
         )
 
         # Unknown-only text must not fall back to showing the whole catalog.

@@ -16,6 +16,8 @@ from pathlib import Path
 from urllib.parse import quote
 from unittest.mock import patch
 
+from flask import g
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import (
@@ -332,15 +334,22 @@ class SearchRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"first 500 characters", response.data)
 
-    def test_retrieval_exception_degrades_to_filtered_closest_matches(self):
+    def test_retrieval_exception_still_scores_filtered_results(self):
         with (
             patch("app.retrieve_candidates", side_effect=RuntimeError("retrieval failed")),
             patch("app.write_search_record") as write_record,
         ):
-            response = self.client.get("/?q=mystery+movies&per_page=12")
+            with self.client as client:
+                response = client.get("/?q=mystery+movies&per_page=12")
+                context = g.search_context
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Closest match", response.data)
-        self.assertNotIn(b"Exact match", response.data)
+        self.assertTrue(context["results"])
+        self.assertTrue(all(
+            item["match_tier"] == "exact" and item["percent"] == 100
+            and not item["show_unverified_badge"]
+            for item in context["results"]
+        ))
+        self.assertEqual(context["result_count_label"], "30 exact, 0 close, 0 related")
         record = write_record.call_args.args[0]
         self.assertIn("expand-retrieve", [item["stage"] for item in record["errors"]])
         self.assertGreater(record["candidate_counts"]["filtered"], 0)
@@ -621,6 +630,51 @@ class SearchRouteTests(unittest.TestCase):
                 titles = re.findall(rb'<h3 class="movie-card__title">(.*?)</h3>', response.data)
                 self.assertTrue(titles)
                 self.assertEqual(titles[0].decode("utf-8"), expected_title)
+
+    def test_constraint_only_query_has_verified_scores_and_independent_results(self):
+        query = "under 90 minutes, comedy, nothing else matters"
+        with self.client as client:
+            response = client.get(
+                "/", query_string={"q": query, "per_page": 48},
+            )
+            context = g.search_context
+
+        self.assertEqual(response.status_code, 200)
+        expected = {
+            movie["id"]
+            for movie in MOVIES
+            if "comedy" in [str(tag).casefold() for tag in movie.get("genres", [])]
+            and isinstance(movie.get("runtime"), (int, float))
+            and 0 < movie["runtime"] <= 89
+        }
+        results = context["results"]
+        self.assertEqual(
+            {item["movie"]["id"] for item in results},
+            expected,
+        )
+        self.assertEqual(context["result_count_label"], "25 exact, 0 close, 0 related")
+        self.assertEqual(len(results), 25)
+        self.assertTrue(all(item["percent"] == 100 for item in results))
+        self.assertTrue(all(item["match_tier"] == "exact" for item in results))
+        self.assertTrue(all(not item["show_unverified_badge"] for item in results))
+        self.assertTrue(all(
+            "comedy genre" in item["match_reason"].lower()
+            and "runtime" in item["match_reason"].lower()
+            for item in results
+        ))
+        expected_order = sorted(
+            results,
+            key=lambda item: (
+                -float(item["movie"].get("average_rating") or 0),
+                -int(item["movie"].get("vote_count") or 0),
+                str(item["movie"].get("title") or "").casefold(),
+                str(item["movie"].get("id")),
+            ),
+        )
+        self.assertEqual(
+            [item["movie"]["id"] for item in results],
+            [item["movie"]["id"] for item in expected_order],
+        )
 
     def test_missing_posters_render_fixed_fallback_asset(self):
         movie = deepcopy(MOVIES[0])

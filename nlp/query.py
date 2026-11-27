@@ -16,6 +16,7 @@ from .extract import (
     REVERSE_INDEX,
     _catalog_word_vocabulary,
     extract_preferences,
+    strip_non_informative_phrases,
 )
 from .fuzzy import correct_unknown_token
 from .negation import find_negation_scopes, is_within_negation_scope
@@ -253,12 +254,14 @@ def detect_cast_gender_constraint(normalized_text):
 
 def _build_structured_query_uncached(raw_query, content_text=None, allow_fuzzy_correction=True):
     """Return the explicit filters, ranking intent, and semantic residual text."""
-    normalized = normalize_text(raw_query).replace(",", " ")
+    normalized = strip_non_informative_phrases(raw_query).replace(",", " ")
     country, country_phrase = detect_country(normalized)
     ranking_intent, ranking_phrase = detect_ranking_intent(normalized)
-    cleaned = _remove_phrases(normalized, [country_phrase, ranking_phrase])
+    cleaned = strip_non_informative_phrases(
+        _remove_phrases(normalized, [country_phrase, ranking_phrase])
+    )
     if content_text is not None:
-        cleaned = content_text
+        cleaned = strip_non_informative_phrases(content_text)
     preferences = extract_preferences(
         cleaned,
         allow_fuzzy_correction=allow_fuzzy_correction,
@@ -305,6 +308,21 @@ def _build_structured_query_uncached(raw_query, content_text=None, allow_fuzzy_c
     if re.search(r"\b(?:haunted house|ghost story|haunting house)\b", normalized):
         preferences["genres"] = sorted(set(preferences["genres"]) | {"horror"})
 
+    has_secondary_constraint = (
+        any(preferences["runtime"].get(key) is not None for key in ("min", "max", "target"))
+        or bool(preferences.get("release_year"))
+    )
+    if has_secondary_constraint:
+        resolved_genres = {
+            item["tag"]
+            for item in preferences.get("ambiguous_interpretations", [])
+            if item["category"] == "genre" and not item.get("negated")
+        }
+        preferences["genres"] = sorted(set(preferences["genres"]) | resolved_genres)
+        preferences["ambiguous_interpretations"] = [
+            item for item in preferences.get("ambiguous_interpretations", [])
+            if not (item["category"] == "genre" and item["tag"] in resolved_genres)
+        ]
     unresolved_ambiguous_tags = {
         (item["category"], item["tag"])
         for item in preferences.get("ambiguous_interpretations", [])
@@ -315,6 +333,7 @@ def _build_structured_query_uncached(raw_query, content_text=None, allow_fuzzy_c
         preferences[key] = [
             value for value in preferences[key]
             if (category, value) not in unresolved_ambiguous_tags
+            or has_secondary_constraint and category == "genre"
         ]
 
     people, languages = detect_people_and_language(normalized)

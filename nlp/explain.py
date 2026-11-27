@@ -45,7 +45,7 @@ def explain_match(movie, preferences, breakdown):
         rt = preferences["runtime"]
         runtime = movie["runtime"]
         if rt["max"] is not None and runtime <= rt["max"]:
-            reasons.append({"ok": True, "text": f"Runtime is {runtime} minutes (under your {rt['max']}-minute limit)"})
+            reasons.append({"ok": True, "text": f"Runtime is {runtime} minutes (within your {rt['max']}-minute limit)"})
         elif rt["max"] is not None:
             reasons.append({"ok": False, "text": f"Runtime is {runtime} minutes (over your {rt['max']}-minute limit)"})
         elif rt["min"] is not None and runtime >= rt["min"]:
@@ -66,5 +66,10 @@ def explain_match(movie, preferences, breakdown):
         reasons.append({"ok": True, "text": f"No {excluded_mood} mood detected"})
     for excluded_theme in preferences["excluded_themes"]:
         reasons.append({"ok": True, "text": f"No {excluded_theme} theme detected"})
+    if breakdown.get("exclusions") is not None:
+        for excluded_keyword in preferences.get("excluded_keywords", []):
+            reasons.append({"ok": True, "text": f"No excluded keyword '{excluded_keyword}' matched"})
+        for excluded_descriptor in preferences.get("excluded_content_descriptors", []):
+            reasons.append({"ok": True, "text": f"No {excluded_descriptor} content descriptor detected"})
 
     return reasons
