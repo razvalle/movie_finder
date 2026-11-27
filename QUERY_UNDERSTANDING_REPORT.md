@@ -50,8 +50,39 @@ Overall: **850/2,440 (34.8%) before; 2,440/2,440 (100%) after.**
 
 ## Validation and known limits
 
-- The final catalog sweep passed **2,440/2,440** cases. Country-name and focused query-understanding tests passed after the final country normalization fix; focused title/compound/year regressions also passed.
-- The last full `unittest` run completed 175 tests and reported two failures. The country-label failure was fixed and its test passed in a targeted rerun. The remaining natural-language genre-conjunction failure also reproduces on clean baseline `41a5447`; it is pre-existing and outside this request. The full suite was not rerun after the country-only fix.
+- The original query-understanding sweep passed **2,440/2,440** cases; the expanded sweep now passes **27,714/27,714**. The full `unittest` suite passes **232/232** tests.
 - The held-out split is a deterministic 20% query-level hash split from the same generated templates/catalog, not an independently authored evaluation corpus. The source-exclusion and fuzzy-suggestion categories each have one tuning case and no held-out case; pass rates for those should not be overgeneralized.
 - The catalog has no cast, director, writer, language, or certification data and sparse awards data (36 records); the app reports these limits rather than fabricating matches. Audience/certification interpretations remain hand-written and cannot be verified against missing certification metadata.
 - Recommendation quality remains bounded by catalog metadata completeness and TF-IDF similarity; generated parser pass rates do not establish human relevance.
+
+## Everyday-language query follow-up
+
+### Confirmed causes and fixes
+
+- **Numbers were fuzzy-corrected as words.** `77` normalized to `7`, so "under 77 minutes" became a six-minute maximum. Numeric and alphanumeric tokens are now preserved before fuzzy correction.
+- **Search grammar was segmented as joined words.** The catalog segmenter split "starring" into "star ring", preventing cast-field coverage notices. Editable protected query terms, plus known concept phrase tokens, now bypass joined-word splitting. A valid compound word such as "greenhouse" is protected as well.
+- **Spelling cleanup could hide existing fuzzy-search behavior.** The app now leaves ordinary spelling correction to the structured parser, preserving its correction notice and exact-search option. Deterministic cleanup remains available to internal retrieval callers.
+- **Normalized title aliases can collide.** `The Suicide Squad` and `Suicide Squad` share an article-insensitive key; source resolution now prefers an exact display/original/alternate title before falling back to normalized aliases.
+- **The first benchmark treated valid ambiguous-mood chips and title formatting variants as parse failures.** Its oracle now accepts a displayed mood alternative and canonical title equivalence. Its runtime/year template now uses an unambiguous "after YYYY" phrase.
+
+### Files and changed locations
+
+- [nlp/human_input.py](./nlp/human_input.py#L199): digit protection, optional fuzzy spelling, catalog-aware normalization, and protected query/concept tokens.
+- [nlp/catalog_matching.py](./nlp/catalog_matching.py#L211): exact-title preference during "like X" resolution.
+- [app.py](./app.py#L1849): input cleanup, preserving parser spelling corrections, and a visible repair notice in the existing notice area.
+- [data/human_input_rules.json](./data/human_input_rules.json): editable persona/noise templates and protected parser vocabulary.
+- [data/everyday_concepts.json](./data/everyday_concepts.json): explicit phrase-to-catalog concept mappings.
+- [tests/human_query_benchmark.py](./tests/human_query_benchmark.py#L79) and [tests/test_human_input.py](./tests/test_human_input.py#L53): generated benchmark and numeric/entity/title regression cases.
+- [render.yaml](./render.yaml#L6): runs the human-query benchmark during deployment build.
+
+### Generated validation
+
+The 1,065-record catalog generated **1,500** human-query trials. The result was **1,500/1,500 (100%)**: tuning **1,198/1,198**, held-out **302/302**. Each generated genre, mood, negation, runtime/year, and "like X" title-resolution group passed. Overall p95/p99 latency was **73.07/98.39 ms**; tuning was **72.10/100.02 ms**, held-out **75.66/98.39 ms**. These are parser/intent checks and do not establish recommendation relevance.
+
+The 27,714-case query-understanding sweep passed with no failures. Focused human-input, smart-search, route, concept-expansion, and compound-evidence tests passed. No layout or styling was changed; the app reuses its existing result notice and interpretation UI.
+
+### Relevance benchmark comparison and limits
+
+The same relevance benchmark was run on committed baseline `dfccd88` and the final worktree. Recall@20 was **0.66 → 0.65** on tuning and **0.52 → 0.52** on held-out. Tuning soft keyword misses were **0% → 5.7%**; held-out remained **1.6%**. The benchmark counts allowed partial-genre fallback cards as genre violations even though the app ranks complete genre matches first and labels missing genres on later close results. These scores are synthetic and should be treated as a prioritization signal, not a quality guarantee.
+
+Mappings and personas are hand-written, deterministic product rules, not learned or user-validated recommendations. Catalog sparsity still limits results; broad negation of a noncanonical phrase such as "not fighting" is not measured by this benchmark and may not resolve to the intended genre exclusions.

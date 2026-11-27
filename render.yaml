@@ -3,6 +3,6 @@ services:
     name: movie-finder-group4
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt && python tests/negated_genre_sweep.py && python data/build_embeddings.py && python tests/search_history_sweep.py
+    buildCommand: pip install -r requirements.txt && python tests/negated_genre_sweep.py && python data/build_embeddings.py && python tests/search_history_sweep.py && python tests/human_query_benchmark.py
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --worker-class gthread --workers 1 --threads 2 --timeout 25 --max-requests 250 --max-requests-jitter 50 --preload
     healthCheckPath: /health

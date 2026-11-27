@@ -7,7 +7,13 @@
   ],
   "non_informative_phrases": [
     "nothing else matters", "that's all", "nothing else", "anything else",
-    "whatever", "anything", "no preference", "surprise me", "i don't care"
+    "whatever", "anything", "no preference", "surprise me", "i don't care",
+    "can you", "could you", "would you", "please find", "find me",
+    "looking for", "i am looking for", "i'm looking for", "i need a movie",
+    "i need something", "i would like", "i'd like", "would like",
+    "recommend me", "suggest me", "show me", "give me", "what are some",
+    "could you recommend", "can you suggest", "any suggestions for",
+    "i feel like watching", "in the mood for"
   ],
   "soft_degree_words": [
     "too", "very", "overly", "much", "super", "extremely"

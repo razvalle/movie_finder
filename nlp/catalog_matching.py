@@ -217,6 +217,24 @@ def resolve_like_title(query, movies):
     if spans and spans[0]["whole_query"]:
         span = spans[0]
         matches = span["movies"]
+        exact_matches = [
+            movie for movie in matches
+            if source.casefold() in {
+                str(movie.get(key, "")).casefold()
+                for key in ("title", "original_title", "alternate_title")
+            } | {
+                str(title).casefold()
+                for key in ("alternate_titles", "alt_titles")
+                for title in (
+                    movie.get(key, [])
+                    if isinstance(movie.get(key), list)
+                    else [movie.get(key)]
+                )
+                if isinstance(title, str)
+            }
+        ]
+        if exact_matches:
+            return exact_matches[0], []
         canonical_matches = [
             movie for movie in matches
             if normalize_title(movie.get("title", "")) == span["alias"]

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "physical-conflict",
+      "phrases": ["fight", "fighting", "fights", "brawl", "brawling", "combat", "boxing", "mma", "mixed martial arts", "fite"],
+      "label": "action, war, or sports films",
+      "keywords": [],
+      "expanded_concepts": ["action", "war", "sport"]
+    },
+    {
+      "id": "road-trip",
+      "phrases": ["road trip", "roadtrip"],
+      "label": "journey and friendship stories",
+      "keywords": ["road trip", "journey", "travel"],
+      "expanded_concepts": ["adventure", "comedy", "friendship"]
+    },
+    {
+      "id": "time-loop",
+      "phrases": ["time loop", "same day", "over and over", "repeats the same day", "relives the same day"],
+      "label": "time-loop stories",
+      "keywords": ["time loop", "repeating day"],
+      "expanded_concepts": ["time loop", "time travel", "drama"]
+    },
+    {
+      "id": "space-threat",
+      "phrases": ["space horror", "scary space", "scary spaceship", "horror in space", "terrifying alien"],
+      "label": "science-fiction and alien-threat films",
+      "keywords": ["alien", "spaceship"],
+      "expanded_concepts": ["space exploration", "sci-fi", "horror"]
+    },
+    {
+      "id": "robot-relationship",
+      "phrases": ["robot romance", "robot love", "love story with a robot", "robot falls in love", "romance with a robot"],
+      "label": "science-fiction relationship stories",
+      "keywords": ["robot", "artificial intelligence", "romance"],
+      "expanded_concepts": ["robot", "sci-fi", "romance"]
+    },
+    {
+      "id": "cooking-story",
+      "phrases": ["cooking story", "chef story", "restaurant story", "movie about cooking"],
+      "label": "cooking and restaurant stories",
+      "keywords": ["cooking", "chef", "restaurant"],
+      "expanded_concepts": ["cooking", "restaurant", "comedy"]
+    },
+    {
+      "id": "mythical-creature",
+      "phrases": ["dragon", "dragons", "dragon fantasy"],
+      "label": "mythical-creature fantasy",
+      "keywords": ["dragon"],
+      "expanded_concepts": ["fantasy", "adventure"]
+    },
+    {
+      "id": "fantasy-creature",
+      "phrases": ["dwarf", "dwarfs", "dwarves"],
+      "label": "fantasy-creature stories",
+      "keywords": ["dwarf"],
+      "expanded_concepts": ["fantasy"]
+    }
+  ]
+}

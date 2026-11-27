@@ -116,14 +116,14 @@ and JSON report show whether a key is configured at audit time.
 The standalone relevance benchmark is a synthetic prioritization signal, not
 real user feedback. Its 100 queries per split cover genre, decade, runtime and
 a keyword derived from the source title; they do not test cast or content
-descriptor requests. The latest run reported recall@20 of 0.770 on the tuning
-split and 0.690 on held-out, with no genre, decade, or runtime violations.
-Keyword misses were 2.2% and 2.4%, respectively; these are soft relevance
-misses, not hard-filter violations. Earlier reports combined keyword misses
-with hard-filter violations and should not be compared to the separated metric.
-This supports prioritizing better descriptive metadata and lexical matching,
-but cannot justify prioritizing cast or content descriptors, which its
-templates never ask for. Run
+descriptor requests. The latest run reported recall@20 of 0.650 on the tuning
+split and 0.520 on held-out. A same-script run on committed baseline `dfccd88`
+reported 0.660 and 0.520, respectively. Tuning keyword misses were 5.7% in the
+worktree versus 0% on baseline; held-out misses were 1.6% in both. The benchmark
+also counts incomplete genre matches among close/related fallback cards as
+violations, although the app intentionally allows those after complete genre
+matches and labels the missing genre. These are synthetic metrics, not human
+relevance judgments. Run
 `python tests/relevance_benchmark.py --split tune` for tuning metrics and
 `python tests/relevance_benchmark.py` for held-out reporting; do not tune on
 the held-out split.
@@ -232,6 +232,25 @@ for every parsed search term, and a displayed score of at least 80%; otherwise
 the result remains a closest match.
 Final score ties are broken by evidence strength, rating, vote count, normalized
 title, then catalog ID for stable ordering.
+
+### Everyday-language search
+
+Search input is normalized locally and deterministically: Unicode and control
+characters are cleaned, common slang and mapped emoji are expanded, hashtags
+are split, and catalog-supported joined words and repeated-letter elongations
+are repaired. Parser vocabulary such as "starring" is protected from being
+split, and numeric tokens are preserved for runtime/year parsing. Ordinary
+spelling corrections remain visible through the existing fuzzy-correction
+notice rather than being silently substituted.
+
+Editable persona/noise templates and parser terms live in
+`data/human_input_rules.json`; generic phrase-to-catalog associations live in
+`data/everyday_concepts.json`. These are explicit local mappings, not learned
+recommendations or external AI. Run `python tests/human_query_benchmark.py` to
+check catalog-derived genre, mood, negation, runtime/year, title-similarity,
+persona, and input-noise cases. The benchmark separates its deterministic
+tuning and held-out splits and reports parser/intent checks and latency; it
+does not measure human relevance.
 
 ### Search resilience and diagnostics
 

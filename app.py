@@ -47,6 +47,7 @@ from data.synonyms import (
 from feedback_store import FEEDBACK_DB_PATH, record_feedback
 from poster_storage import poster_public_base_url, poster_public_url
 from nlp.extract import extract_preferences, remove_negated_terms
+from nlp.human_input import normalize_human_input
 from nlp.normalize import normalize_text
 from nlp.tokenize import STOPWORDS as TOKEN_STOPWORDS
 from nlp.query import (
@@ -1844,11 +1845,32 @@ def _scarce_topic_notice(query, understanding):
 def index():
     raw_query = request.args.get("q", "")
     query_was_capped = len(raw_query) > MAX_QUERY_LENGTH
-    query = raw_query[:MAX_QUERY_LENGTH].strip()
+    visible_query = raw_query[:MAX_QUERY_LENGTH].strip()
+    input_normalization = normalize_human_input(
+        visible_query, MOVIES, correct_spelling=False,
+    )
+    query = input_normalization["text"][:MAX_QUERY_LENGTH].strip()
+    query_was_capped = query_was_capped or len(input_normalization["text"]) > MAX_QUERY_LENGTH
     exact_search = request.args.get("exact") == "1"
+    input_repair_notice = ""
+    if (
+        query.casefold() != visible_query.casefold()
+        and any(
+            repair in input_normalization["repairs"]
+            for repair in (
+                "joined words split", "elongation normalized",
+                "catalog spelling corrected", "hashtag expanded",
+                "slang expanded", "emoji interpreted",
+            )
+        )
+    ):
+        input_repair_notice = (
+            f'Showing results for "{query}" (you typed "{visible_query}").'
+        )
     query_notices = [
         f"Search was limited to the first {MAX_QUERY_LENGTH} characters."
         if query_was_capped else "",
+        input_repair_notice,
         INDEX_FALLBACK_NOTICE,
     ]
     query_notice = " ".join(part for part in query_notices if part)
@@ -2074,7 +2096,9 @@ def index():
             effective_nationality = ""
     understanding = _run_search_stage(
         "parse",
-        lambda: copy.deepcopy(interpret_query(query, exact_search=exact_search)),
+        lambda: copy.deepcopy(interpret_query(
+            query, exact_search=exact_search, input_normalized=True,
+        )),
         None,
         trace,
     ) if query else None
@@ -2087,6 +2111,7 @@ def index():
             lambda: copy.deepcopy(interpret_query(
                 preference_query,
                 exact_search=exact_search,
+                input_normalized=True,
             )),
             None,
             trace,
@@ -2103,6 +2128,77 @@ def index():
             item for item in understanding.get("ambiguous_interpretations", [])
             if item.get("surface") not in resolved_surfaces
         ]
+    alternate_interpretations = []
+    dropped_human_concepts = {
+        value[:96] for value in request.args.getlist("drop")[:32]
+    }
+    active_human_concepts = []
+    if understanding and understanding.get("everyday_concepts"):
+        active_human_concepts = [
+            item for item in understanding["everyday_concepts"]
+            if f"everyday:{item['id']}" not in dropped_human_concepts
+        ]
+        if active_human_concepts and query_preferences:
+            mapped_surface_terms = {
+                token
+                for item in active_human_concepts
+                for token in normalize_text(item["surface"]).split()
+            }
+            query_preferences["free_text_keywords"] = [
+                term for term in query_preferences["free_text_keywords"]
+                if term not in mapped_surface_terms
+            ]
+        if len(active_human_concepts) != len(understanding["everyday_concepts"]):
+            understanding["everyday_concepts"] = active_human_concepts
+            understanding["semantic_query"] = understanding.get("base_semantic_query", "")
+            for item in active_human_concepts:
+                phrase = normalize_text(item["surface"]).casefold()
+                understanding["semantic_query"] = re.sub(
+                    rf"(?<!\w){re.escape(phrase)}(?!\w)",
+                    " ",
+                    understanding["semantic_query"],
+                )
+            understanding["semantic_query"] = " ".join(
+                understanding["semantic_query"].split()
+            )
+            understanding["keywords"] = list(dict.fromkeys(
+                understanding.get("base_keywords", [])
+                if not understanding["everyday_concepts"] else [
+                    keyword for keyword in understanding.get("base_keywords", [])
+                    if keyword not in {
+                        token
+                        for item in active_human_concepts
+                        for token in normalize_text(item["surface"]).split()
+                    }
+                ]
+                + [
+                    keyword for item in active_human_concepts
+                    for keyword in item.get("keywords", [])
+                ]
+            ))[:12]
+            understanding["expanded_concepts"] = list(dict.fromkeys(
+                understanding.get("base_expanded_concepts", [])
+                + [
+                    term for item in active_human_concepts
+                    for term in item.get("expanded_concepts", [])
+                ]
+            ))[:12]
+            if any(item["id"] == "road-trip" for item in understanding["everyday_concepts"]):
+                understanding["hard_constraints"] = list(dict.fromkeys(
+                    understanding.get("hard_constraints", []) + ["road trip"]
+                ))
+            else:
+                understanding["hard_constraints"] = [
+                    item for item in understanding.get("hard_constraints", [])
+                    if item != "road trip"
+                ]
+    for item in active_human_concepts:
+        alternate_interpretations.append({
+            "type": "neutral",
+            "label": "Also read as",
+            "value": f"{item['label']} (editable mapping)",
+            "key": f"everyday:{item['id']}",
+        })
     if like_source_movie and understanding:
         understanding["similar_to"] = like_source_movie["title"]
         understanding["similar_to_movie_id"] = like_source_movie["id"]
@@ -2118,7 +2214,6 @@ def index():
                 if movie.get("title") in like_series["titles"]
                 and movie.get("id") != like_source_movie.get("id")
             ]
-    alternate_interpretations = []
     if embedded_title_intent and query_preferences:
         embedded_query_analysis = _run_search_stage(
             "parse",
@@ -2311,8 +2406,15 @@ def index():
     normalization_notice = ""
     exact_search_url = ""
 
+    query_debug = dict(query_analysis["debug"] if query_analysis else {})
+    query_debug["normalized_input"] = query
+    query_debug["input_repairs"] = input_normalization["repairs"]
+    query_debug["human_interpretations"] = [
+        item["label"] for item in active_human_concepts
+    ]
+
     context = {
-        "query": query,
+        "query": visible_query,
         "enforced_exclusion_keys": [
             f"{prefix}:{value}"
             for field, prefix in (
@@ -2366,7 +2468,7 @@ def index():
         "result_count": len(filtered_movies),
         "result_count_label": "",
         "result_tier_counts": {"exact": 0, "close": 0, "related": 0},
-        "query_debug": query_analysis["debug"] if query_analysis else {},
+        "query_debug": query_debug,
         "debug_enabled": debug_enabled,
         "debug_view": None,
     }

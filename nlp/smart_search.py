@@ -32,12 +32,15 @@ from .concepts import (
 )
 from .extract import strip_non_informative_phrases
 from .fuzzy import correct_unknown_token
+from .human_input import match_everyday_concepts, normalize_human_input
+from .negation import find_negation_scopes, is_within_negation_scope
 from .normalize import normalize_text
 from .query import EXPLICIT_SYNTAX_TOKENS, build_structured_query
 from .runtime import WORD_NUMBERS
 from .scoring import _movie_contains_concept, is_excluded
 from .similarity import cosine_similarity, vector_norm
 from .tfidf import build_tfidf_model, simple_word_tokens, vectorize_query
+from .tokenize import tokenize
 from .catalog_matching import normalize_title
 
 
@@ -115,49 +118,6 @@ GENRE_ALIASES = {
     "animated": "animation", "cartoon": "animation", "cartoons": "animation",
     "biopic": "biography", "biopics": "biography",
 }
-
-LOCAL_CONCEPTS = [
-    {
-        "pattern": r"\b(?:dwarfs?|dwarves|dwarf|little people)\b",
-        "keywords": ["dwarf", "dwarves", "little people"],
-        "expanded_concepts": ["hobbit", "Middle-earth", "fantasy", "mines", "fairy tale"],
-    },
-    {
-        "pattern": r"\brobot\b.*\b(?:love|romance|falls for|falls in love)\b|\b(?:love|romance)\b.*\brobot\b",
-        "keywords": ["robot", "artificial intelligence", "romance"],
-        "expanded_concepts": ["android", "human-machine relationship", "science fiction"],
-    },
-    {
-        "pattern": r"\b(?:road trip|roadtrip)\b",
-        "keywords": ["road trip", "journey", "travel"],
-        "expanded_concepts": ["comedy", "friends", "cross-country trip"],
-    },
-    {
-        "pattern": r"\b(?:same day|over and over|repeats? the same day|time loop|relives?)\b",
-        "keywords": ["time loop", "repeating day", "reliving the same day"],
-        "expanded_concepts": ["time loop", "temporal repetition", "resetting timeline"],
-    },
-    {
-        "pattern": r"\b(?:space|spaceship|outer space)\b.*\b(?:scary|horror|terrifying|alien)\b|\b(?:scary|horror)\b.*\b(?:space|spaceship|outer space)\b",
-        "keywords": ["space horror", "alien", "spaceship"],
-        "expanded_concepts": ["deep space", "isolated crew", "extraterrestrial threat"],
-    },
-    {
-        "pattern": r"\b(?:rat|mouse)\b.*\b(?:cook(?:s|ing)?|chef)\b|\b(?:cook(?:s|ing)?|chef)\b.*\b(?:rat|mouse)\b",
-        "keywords": ["rat chef", "cooking", "restaurant"],
-        "expanded_concepts": ["animated culinary story", "Paris kitchen", "ambitious chef"],
-    },
-    {
-        "pattern": r"\bchess\b.*\b(?:prodigy|genius|young|child|player)\b|\b(?:prodigy|genius)\b.*\bchess\b",
-        "keywords": ["chess", "prodigy", "young chess player"],
-        "expanded_concepts": ["tournament", "chess master", "coming of age"],
-    },
-    {
-        "pattern": r"\b(?:dragon|dragons|drgons)\b",
-        "keywords": ["dragon", "dragons"],
-        "expanded_concepts": ["fantasy", "mythical creature", "fire-breathing"],
-    },
-]
 
 STOP_WORDS = {
     "a", "an", "and", "about", "as", "at", "be", "but", "by", "for", "from",
@@ -333,13 +293,22 @@ def _sanitize_filters(value):
     }
 
 
-def local_understanding(raw_query, exact_search=False):
+def local_understanding(
+    raw_query,
+    exact_search=False,
+    *,
+    structured=None,
+    input_normalized=False,
+):
     """Interpret a query with the project's deterministic NLP rules."""
+    if not input_normalized:
+        raw_query = normalize_human_input(raw_query, _STARTUP_MOVIES)["text"]
     clean_query = strip_non_informative_phrases(raw_query)
-    structured = build_structured_query(
-        clean_query,
-        allow_fuzzy_correction=not exact_search,
-    )
+    if structured is None:
+        structured = build_structured_query(
+            clean_query,
+            allow_fuzzy_correction=not exact_search,
+        )
     preferences = structured["preferences"]
     required_terms = list(preferences["free_text_keywords"])
     keywords = list(required_terms)
@@ -362,14 +331,61 @@ def local_understanding(raw_query, exact_search=False):
     animal_only = bool(re.search(r"\b(?:only|just)\s+animals?\b", normalize_text(clean_query)))
     silent_request = bool(re.search(r"\bsilent(?:\s+(?:film|movie))?\b", normalize_text(clean_query)))
     black_and_white_request = bool(re.search(r"\bblack\s+and\s+white\b|\bblack-and-white\b", normalize_text(clean_query)))
-    concepts = []
     normalized = normalize_text(clean_query)
-    road_trip_request = bool(re.search(r"\broad(?:\s+|-)?trip\b", normalized))
-    for item in LOCAL_CONCEPTS:
-        if re.search(item["pattern"], normalized, re.IGNORECASE):
-            keywords.extend(item["keywords"])
-            concepts.extend(item["expanded_concepts"])
-            required_terms = []  # a synonym-table concept stands in for the literal words
+    concept_matches = match_everyday_concepts(normalized)
+    base_keywords = list(dict.fromkeys(keywords))
+    tokens = tokenize(normalized)
+    negation_scopes = find_negation_scopes(tokens)
+    positive_concepts = []
+    negated_surfaces = []
+    for item in concept_matches:
+        phrase_tokens = tokenize(item["surface"])
+        matched_span = next((
+            (start, start + len(phrase_tokens) - 1)
+            for start in range(len(tokens) - len(phrase_tokens) + 1)
+            if tokens[start:start + len(phrase_tokens)] == phrase_tokens
+        ), None)
+        if matched_span and is_within_negation_scope(*matched_span, negation_scopes):
+            negated_surfaces.append(item["surface"])
+        else:
+            positive_concepts.append(item)
+    concepts = []
+    concept_words = set(simple_word_tokens(
+        " ".join(item["surface"] for item in positive_concepts)
+    ))
+    keywords = [keyword for keyword in keywords if keyword not in concept_words]
+    for item in positive_concepts:
+        keywords.extend(item["keywords"])
+        concepts.extend(item["expanded_concepts"])
+    if positive_concepts:
+        required_terms = []
+    base_expanded_concepts = list(dict.fromkeys(preferences["moods"]))
+    semantic_query = normalized
+    genre_surfaces = {
+        normalize_text(surface).casefold()
+        for canonical, aliases in GENRE_SYNONYMS.items()
+        for surface in (canonical, *aliases)
+    }
+    for mood in preferences["moods"]:
+        mood_surfaces = sorted(
+            {mood, *MOOD_SYNONYMS.get(mood, [])},
+            key=len,
+            reverse=True,
+        )
+        for surface in mood_surfaces:
+            phrase = normalize_text(surface).casefold()
+            if phrase and phrase not in genre_surfaces:
+                semantic_query = re.sub(
+                    rf"(?<!\w){re.escape(phrase)}(?!\w)", " ", semantic_query,
+                )
+    base_semantic_query = " ".join(semantic_query.split())
+    for item in positive_concepts:
+        phrase = normalize_text(item["surface"]).casefold()
+        semantic_query = re.sub(
+            rf"(?<!\w){re.escape(phrase)}(?!\w)", " ", semantic_query,
+        )
+    semantic_query = " ".join(semantic_query.split())
+    road_trip_request = any(item["id"] == "road-trip" for item in positive_concepts)
 
     decade = re.search(r"\b(\d{2})s\b", normalized)
     if decade:
@@ -379,7 +395,7 @@ def local_understanding(raw_query, exact_search=False):
     year = preferences.get("release_year") or {}
     core_intent = re.sub(
         r"\b(?:please|recommend me|recommend|suggest|show me|i want|i would like|something like|something|a movie|movie|film)\b",
-        " ", normalized, flags=re.IGNORECASE,
+        " ", semantic_query, flags=re.IGNORECASE,
     )
     core_intent = " ".join(core_intent.split())[:300]
     similar_match = SIMILAR_TO_PATTERN.search(normalized)
@@ -387,10 +403,15 @@ def local_understanding(raw_query, exact_search=False):
     if similar_to_title:
         required_terms = []
     return {
-        "core_intent": core_intent or raw_query[:300],
+        "core_intent": core_intent or semantic_query[:300],
         "required_terms": required_terms[:6],
         "keywords": list(dict.fromkeys(keywords))[:12],
-        "expanded_concepts": list(dict.fromkeys(concepts))[:12],
+        "base_keywords": base_keywords[:12],
+        "base_expanded_concepts": base_expanded_concepts[:12],
+        "expanded_concepts": list(dict.fromkeys(base_expanded_concepts + concepts))[:12],
+        "base_semantic_query": base_semantic_query,
+        "semantic_query": semantic_query,
+        "everyday_concepts": positive_concepts[:8],
         "example_titles": [],
         "genres": preferences["genres"],
         "mood_tone": preferences["moods"],
@@ -407,6 +428,7 @@ def local_understanding(raw_query, exact_search=False):
             + preferences.get("excluded_content_descriptors", [])
             + preferences.get("excluded_themes", [])
             + preferences.get("excluded_keywords", [])
+            + negated_surfaces
             + [
                 value for item in preferences.get("ambiguous_interpretations", [])
                 if item.get("negated")
@@ -456,12 +478,17 @@ def local_understanding(raw_query, exact_search=False):
     }
 
 
-def interpret_query(raw_query, exact_search=False):
+def interpret_query(raw_query, exact_search=False, input_normalized=False):
     raw_query = raw_query[:MAX_QUERY_LENGTH]
+    if not input_normalized:
+        raw_query = normalize_human_input(
+            raw_query, _STARTUP_MOVIES,
+        )["text"]
     normalized_query = normalize_text(raw_query).casefold()
-    parsed = build_structured_query(
+    structured = build_structured_query(
         raw_query, allow_fuzzy_correction=not exact_search,
-    )["preferences"]
+    )
+    parsed = structured["preferences"]
     polarity = tuple(sorted(
         (polarity, field, value)
         for polarity, field in (
@@ -483,7 +510,12 @@ def interpret_query(raw_query, exact_search=False):
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-    result = local_understanding(raw_query, exact_search=exact_search)
+    result = local_understanding(
+        raw_query,
+        exact_search=exact_search,
+        structured=structured,
+        input_normalized=True,
+    )
     _cache_set(cache_key, result)
     return result
 
@@ -576,7 +608,9 @@ def _split_unknown_word(word, word_support):
 
 
 def _normalize_query_concepts(raw_query, understanding, movies):
-    raw_query = strip_non_informative_phrases(raw_query)
+    raw_query = strip_non_informative_phrases(
+        understanding.get("semantic_query", raw_query),
+    )
     required = understanding.get("required_terms") or []
     if required:
         source_terms = required
@@ -877,7 +911,9 @@ def _constraint_words(understanding):
 
 
 def _query_terms(raw_query, understanding):
-    clean_query = strip_non_informative_phrases(raw_query)
+    clean_query = strip_non_informative_phrases(
+        understanding.get("semantic_query", raw_query),
+    )
     sources = [
         _remove_negated_concepts(clean_query),
         _remove_negated_concepts(understanding.get("core_intent", "")),
@@ -942,7 +978,9 @@ def _raw_query_terms(raw_query):
 
 
 def _raw_query_terms_from_understanding(raw_query, understanding):
-    raw_query = strip_non_informative_phrases(raw_query)
+    raw_query = strip_non_informative_phrases(
+        understanding.get("semantic_query", raw_query),
+    )
     constraint_words = _constraint_words(understanding)
     negative_terms = _negative_query_terms(understanding)
     return list(dict.fromkeys(
@@ -1343,7 +1381,9 @@ def retrieve_plain_candidates(raw_query, understanding, movies, tfidf_model=None
     direct_understanding = dict(understanding or {})
     direct_understanding["expanded_concepts"] = []
     direct_understanding["keywords"] = []
-    clean_query = strip_non_informative_phrases(raw_query[:MAX_QUERY_LENGTH])
+    clean_query = strip_non_informative_phrases(
+        direct_understanding.get("semantic_query", raw_query[:MAX_QUERY_LENGTH]),
+    )
     terms = _query_terms(clean_query, direct_understanding)
     if not terms:
         negative_terms = _negative_query_terms(direct_understanding)

@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "slang": {
+    "pls": "please",
+    "plz": "please",
+    "wanna": "want to",
+    "gonna": "going to",
+    "kinda": "kind of",
+    "sorta": "sort of",
+    "rn": "right now",
+    "im": "i am"
+  },
+  "protected_query_terms": [
+    "starring", "directed", "written", "rated", "rating", "certification",
+    "certificate", "actor", "actress", "director", "writer", "called",
+    "named", "titled", "similar", "style", "greenhouse"
+  ],
+  "emoticons": {
+    ":-)": "happy",
+    ":)": "happy",
+    ":-(": "sad",
+    ":(": "sad",
+    ":d": "funny",
+    ";-)": "playful",
+    ";)": "playful",
+    "<3": "romantic"
+  },
+  "emoji": {
+    "😂": "funny",
+    "😆": "funny",
+    "😭": "sad",
+    "😢": "sad",
+    "🥺": "emotional",
+    "😱": "scary",
+    "👻": "scary",
+    "❤️": "romantic",
+    "❤": "romantic",
+    "💖": "romantic",
+    "💥": "action",
+    "🧠": "thought provoking",
+    "🐉": "dragon fantasy"
+  },
+  "personas": {
+    "teen": ["need a {intent} movie rn", "what's a good {intent} film?"],
+    "young-adult": ["can you find me a {intent} movie", "looking for something {intent}"],
+    "busy-parent": ["something {intent} for family movie night", "a quick {intent} movie for the kids"],
+    "older-adult": ["please suggest a {intent} film", "I'd like to watch something {intent}"],
+    "non-native-english": ["movie with {intent}, please", "I want film {intent}"],
+    "taglish-filipino": ["gusto ko ng {intent} na movie", "hanap ng {intent} film please"],
+    "low-literacy": ["{intent} movie pls", "movie {intent}"],
+    "voice-dictation": ["find me a {intent} movie please", "I want something {intent}"],
+    "technical": ["recommend a movie tagged {intent}", "filter films by {intent}"],
+    "film-buff": ["a film with {intent} and strong reviews", "something {intent} with a distinctive style"],
+    "emotion-driven": ["I feel like watching something {intent}", "give me a movie that feels {intent}"],
+    "curiosity-trivia": ["what's a well-known {intent} movie", "show a highly rated film about {intent}"],
+    "occasion-driven": ["a {intent} movie for date night", "something {intent} for a weekend watch"],
+    "reformulating": ["actually, make that a {intent} movie", "no, I meant something {intent}"]
+  },
+  "behavior_templates": {
+    "genre": ["{genre} movies", "a movie in the {genre} genre"],
+    "mood": ["something {mood}", "a film that feels {mood}"],
+    "similarity": ["movies like {title}", "something similar to {title}"],
+    "runtime-year": ["{genre} under {runtime} minutes after {year}"],
+    "negation": ["not {genre}", "no {genre} movies"]
+  },
+  "noise_levels": {
+    "none": [],
+    "light": ["smart-punctuation", "elongation", "hashtag"],
+    "medium": ["zero-width", "joined-words", "nonbreaking-space", "emoji"],
+    "heavy": ["smart-punctuation", "elongation", "hashtag", "zero-width", "joined-words", "nonbreaking-space", "emoji"]
+  },
+  "benchmark_targets": {
+    "intent_parse_rate": 0.95,
+    "constraint_parse_rate": 0.95,
+    "noise_equivalence": 0.9,
+    "answerability_honesty": 1.0,
+    "false_exact_rate": 0.0,
+    "supported_field_rate": 0.95,
+    "top_k_relevance": 0.7,
+    "latency_p95_ms": 400,
+    "latency_p99_ms": 1000
+  }
+}
