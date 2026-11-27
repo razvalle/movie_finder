@@ -25,7 +25,6 @@ from app import (
     COUNTRY_LABELS,
     app,
     _contains_complete_title,
-    build_match_reasons,
     detect_nationality,
     drop_constraints,
     find_title_matches,
@@ -35,8 +34,8 @@ from app import (
 )
 from data.generated_movies import GENERATED_MOVIES
 from data.movies import MOVIES
-from nlp.explain import explain_match
 from nlp.search_diagnostics import SearchTrace
+from nlp.match_pipeline import _bayesian_rating
 
 
 class SearchRouteTests(unittest.TestCase):
@@ -323,9 +322,6 @@ class SearchRouteTests(unittest.TestCase):
             patch("app.MOVIES", movies),
             patch("app.retrieve_candidates", side_effect=retrieve),
             patch("app.rerank_candidates", side_effect=rerank),
-            patch("app.build_match_reasons", return_value=[{
-                "ok": True, "text": "Synthetic runtime evidence.",
-            }]),
             patch("app.write_search_record"),
         ):
             response = self.client.get("/?q=under+100+minutes&per_page=10")
@@ -440,11 +436,32 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn(b'class="movie-card"', response.data)
         self.assertNotIn(b"No movies found.", response.data)
 
-    def test_explanation_exception_keeps_results_and_supplies_a_fallback_reason(self):
-        with patch("app.build_match_reasons", side_effect=RuntimeError("explanation failed")):
-            response = self.client.get("/?q=space+movies&per_page=12")
+    def test_shared_pipeline_supplies_result_reasons(self):
+        response = self.client.get("/?q=space+movies&per_page=12")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'class="movie-card__reasons"', response.data)
+
+    def test_similarity_query_uses_pipeline_score_and_excludes_its_source(self):
+        with self.client as client:
+            response = client.get(
+                "/", query_string={"q": "movies like Zodiac", "per_page": "12"},
+            )
+            results = g.search_context["results"]
+            counts = g.search_context["result_tier_counts"]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(results)
+        self.assertNotIn(
+            "zodiac",
+            {item["movie"]["title"].casefold() for item in results},
+        )
+        self.assertTrue(all(0 < item["percent"] < 80 for item in results))
+        self.assertTrue(all(item["match_tier"] == "close" for item in results))
+        self.assertEqual(counts["exact"], 0)
+        self.assertTrue(all(
+            "metadata similarity to zodiac" in item["match_reason"].casefold()
+            for item in results
+        ))
 
     def test_exact_label_is_downgraded_when_the_displayed_score_is_below_threshold(self):
         original_rank = rank_movies
@@ -668,40 +685,6 @@ class SearchRouteTests(unittest.TestCase):
         self.assertEqual(movie_poster_url({"poster_url": commons_url}), commons_url)
         self.assertEqual(movie_poster_url({"poster_url": "https://example.invalid/poster.jpg"}), "")
 
-    def test_search_explanations_use_existing_scoring_breakdown(self):
-        movie = {"runtime": 110, "release_year": 2020}
-        preferences = {
-            "runtime": {"min": None, "max": None, "target": None},
-            "release_year": {"min": 2020, "max": 2020},
-            "excluded_genres": ["horror"],
-            "excluded_moods": [],
-            "excluded_themes": [],
-        }
-        breakdown = {
-            "genre": {"matched": ["mystery"], "missing": []},
-            "mood": {"matched": ["suspenseful"], "missing": []},
-            "theme": None,
-            "keyword": None,
-            "runtime": None,
-            "release_year": 1.0,
-        }
-        reasons = build_match_reasons(
-            movie,
-            preferences,
-            breakdown,
-            ["mood suspenseful", "theme mystery", "keyword detective"],
-            cast_supported=True,
-        )
-        reason_text = [reason["text"] for reason in reasons]
-        self.assertIn("Mystery genre matched", reason_text)
-        self.assertIn("Suspenseful mood matched", reason_text)
-        self.assertIn("Released in 2020", reason_text)
-        self.assertIn("No horror tag detected", reason_text)
-        self.assertIn("Matched: mood suspenseful", reason_text)
-        self.assertIn("Matched: theme mystery", reason_text)
-        self.assertIn("Matched: keyword detective", reason_text)
-        self.assertIn("Cast evidence supports your request", reason_text)
-
     def test_search_benchmark_expected_top_results(self):
         cases = [
             ("The Ring", "The Ring"),
@@ -750,7 +733,7 @@ class SearchRouteTests(unittest.TestCase):
         expected_order = sorted(
             results,
             key=lambda item: (
-                -float(item["movie"].get("average_rating") or 0),
+                -_bayesian_rating(item["movie"]),
                 -int(item["movie"].get("vote_count") or 0),
                 str(item["movie"].get("title") or "").casefold(),
                 str(item["movie"].get("id")),

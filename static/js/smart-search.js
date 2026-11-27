@@ -130,7 +130,9 @@
     if (!list) return;
     const cards = [...list.querySelectorAll(".movie-card")];
     const number = (card, key) => Number(card.dataset[`sort${key}`]) || 0;
+    const tier = (card) => ({ exact: 3, close: 2, related: 1 }[card.dataset.matchTier] || 0);
     cards.sort((left, right) => {
+      if (tier(left) !== tier(right)) return tier(right) - tier(left);
       const leftTier = Number(left.dataset.genreMatchCount) || 0;
       const rightTier = Number(right.dataset.genreMatchCount) || 0;
       if (leftTier !== rightTier) return rightTier - leftTier;

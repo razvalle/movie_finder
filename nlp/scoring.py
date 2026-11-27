@@ -31,20 +31,7 @@ from data.synonyms import (
 )
 from .similarity import cosine_similarity, vector_norm
 from .tfidf import vectorize_query
-
-# Base weights for requested constraints and evidence. Only active factors are
-# used, and their weights are renormalized for each query.
-BASE_WEIGHTS = {
-    "genre": 0.28,
-    "mood": 0.24,
-    "theme": 0.14,
-    "keyword": 0.16,  # TF-IDF/cosine similarity against free-text description
-    "runtime": 0.12,
-    "release_year": 0.06,
-    "exclusions": 0.18,
-    "evidence": 0.68,
-    "search": 0.10,
-}
+from .match_policy import BASE_WEIGHTS
 
 MIN_DESCRIPTION_SIMILARITY = 0.15
 

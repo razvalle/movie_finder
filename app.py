@@ -65,7 +65,13 @@ from nlp.scoring import (
     evaluate_runtime_status,
     rank_movies,
 )
-from nlp.explain import explain_match, title_case
+from nlp.explain import title_case
+from nlp.match_pipeline import (
+    finalize_results,
+    order_browse_movies,
+    tier_count_label,
+    tier_counts,
+)
 from nlp.conversation import build_alternative_queries, build_assistant_message
 from nlp.smart_search import (
     EXACT_MATCH_THRESHOLD,
@@ -87,7 +93,6 @@ from nlp.search_diagnostics import (
     write_search_record,
 )
 from nlp.catalog_matching import (
-    SERIES_MEMBER_MATCH_PERCENT,
     detect_title_spans,
     derive_series_groups,
     find_like_source_text,
@@ -117,12 +122,6 @@ def add_security_headers(response):
     return response
 
 
-_TOTAL_VOTES = sum(movie.get("vote_count") or 0 for movie in MOVIES)
-_BAYESIAN_RATING_PRIOR = sum(
-    (movie.get("average_rating") or 0) * (movie.get("vote_count") or 0)
-    for movie in MOVIES
-) / max(1, _TOTAL_VOTES)
-_BAYESIAN_MINIMUM_VOTES = load_query_rules()["bayesian_minimum_votes"]
 _TOPIC_SUPPORT_SOURCE = None
 _TOPIC_SUPPORT = None
 _GENERATED_SYNOPSIS_RE = re.compile(
@@ -573,33 +572,6 @@ def movie_poster_url(movie):
     return ""
 
 
-def build_match_reasons(movie, preferences, breakdown, satisfied=(), cast_supported=False):
-    reasons = explain_match(movie, preferences, breakdown)
-    existing = {reason["text"].casefold() for reason in reasons}
-    genre_values = movie.get("genres") or []
-    if isinstance(genre_values, str):
-        genre_values = [genre_values]
-    actual_genres = {
-        normalize_title(genre)
-        for genre in genre_values
-        if isinstance(genre, str)
-    }
-    for genre in preferences.get("genres", []):
-        if not actual_genres.intersection(_concept_forms(GENRE_SYNONYMS, genre)):
-            text = f"Missing: {title_case(genre)} genre"
-            if text.casefold() not in existing:
-                reasons.append({"ok": False, "text": text})
-                existing.add(text.casefold())
-    for detail in satisfied:
-        text = f"Matched: {detail}"
-        if text.casefold() not in existing:
-            reasons.append({"ok": True, "text": text})
-            existing.add(text.casefold())
-    if cast_supported:
-        reasons.append({"ok": True, "text": "Cast evidence supports your request"})
-    return reasons
-
-
 def movie_origin_label(movie):
     countries = movie.get("production_countries") or []
     if isinstance(countries, str):
@@ -773,26 +745,6 @@ def find_filter_conflicts(preferences, selected_genres=()):
     if year.get("min") is not None and year.get("max") is not None and year["min"] > year["max"]:
         messages.append("Conflict: minimum year exceeds maximum year. Remove either side below.")
     return messages
-
-
-def ranking_key(entry, ranking_intent):
-    movie = entry["movie"]
-    rating = movie.get("average_rating") or 0
-    votes = movie.get("vote_count") or 0
-    year = movie.get("release_year") or 0
-    weighted_prior = _BAYESIAN_RATING_PRIOR
-    minimum_votes = _BAYESIAN_MINIMUM_VOTES
-    adjusted_rating = (
-        (votes / (votes + minimum_votes)) * rating
-        + (minimum_votes / (votes + minimum_votes)) * weighted_prior
-    ) if votes + minimum_votes else weighted_prior
-    if ranking_intent == "popular":
-        return (votes, rating, entry["percent"], year)
-    if ranking_intent == "best":
-        return (adjusted_rating, votes, entry["percent"], year)
-    if ranking_intent == "worst":
-        return (-adjusted_rating, votes, entry["percent"], year)
-    return (entry["percent"], rating, votes, year)
 
 
 def build_debug_view(query_analysis, preferences, filtered_count, result_count):
@@ -1725,14 +1677,6 @@ def _append_alternative_preference_tags(context, alternatives, dropped):
             ),
         })
         existing_keys.add(key)
-
-
-def _result_tier_counts(results):
-    counts = {"exact": 0, "close": 0, "related": 0}
-    for result in results:
-        tier = result.get("match_tier", "close")
-        counts[tier if tier in counts else "close"] += 1
-    return counts
 
 
 def _topic_support_index():
@@ -2865,15 +2809,10 @@ def index():
                 or embedded_title_intent and not title_prefix_query
             )
         )
-        if title_match_ids and title_query_is_exact:
-            for entry in all_results:
-                if str(entry["movie"]["id"]) in title_match_ids:
-                    entry["percent"] = SERIES_MEMBER_MATCH_PERCENT
         for entry in all_results:
             candidate = candidate_by_id.get(str(entry["movie"]["id"]))
             if candidate is None:
                 continue
-            entry["match_reason"] = candidate["match_reason"]
             entry["satisfied"] = candidate.get("satisfied", [])
             entry["unsatisfied"] = candidate.get("unsatisfied", [])
             entry["unverifiable"] = candidate.get("unverifiable", [])
@@ -2883,49 +2822,10 @@ def index():
             )
             entry["confidence"] = candidate.get("confidence", 0)
             entry["verification_fallback"] = candidate.get("verification_fallback", False)
-            candidate["percent"] = entry["percent"]
-            candidate["final_score"] = entry["percent"]
-            candidate["match_level"] = (
-                "full"
-                if candidate.get("match_eligible")
-                and entry["percent"] >= EXACT_MATCH_THRESHOLD
-                else "partial"
-            )
-            query_evidence = candidate.get("query_evidence", {})
-            candidate["match_tier"] = (
-                "exact" if candidate["match_level"] == "full"
-                else "close" if candidate.get("fallback_only")
-                else "related" if query_evidence.get("associated_count", 0) >= 2
-                and not query_evidence.get("details")
-                else "close"
-            )
-            entry["match_level"] = candidate["match_level"]
-            entry["match_tier"] = candidate["match_tier"]
-            entry["evidence_strength"] = candidate.get("evidence_strength", 0.0)
-            entry["final_score"] = entry["percent"]
-        if title_match_ids and title_query_is_exact:
-            for entry in all_results:
-                if str(entry["movie"]["id"]) in title_match_ids:
-                    entry["percent"] = 100
-                    entry["match_level"] = "full"
-                    entry["match_tier"] = "exact"
-                    entry["match_reason"] = (
-                        f"Same series as {title_search_query.strip()}."
-                        if len(title_matches) > 1 and not embedded_title_intent
-                        else f"Matched title span: {entry['movie']['title']}."
-                        if embedded_title_intent
-                        else f"Matched title: {entry['movie']['title']}."
-                    )
-        elif title_prefix_query:
-            for entry in all_results:
-                if str(entry["movie"]["id"]) in title_match_ids:
-                    entry["match_level"] = "partial"
-                    entry["match_tier"] = "close"
         safe_results = []
         eligible_ids = {str(movie.get("id")) for movie in filtered_movies}
         for entry in all_results:
             movie = entry["movie"]
-            candidate = candidate_by_id.get(str(movie.get("id")), {})
             score = entry.get("percent")
             if (
                 str(movie.get("id")) not in eligible_ids
@@ -2944,19 +2844,6 @@ def index():
                         ),
                     )
                 continue
-            if entry.get("match_level") == "full" and (
-                score < EXACT_MATCH_THRESHOLD
-                or not candidate.get("match_eligible")
-                or candidate.get("unsatisfied")
-                or candidate.get("unverifiable")
-            ) and str(movie["id"]) not in title_match_ids:
-                entry["match_level"] = "partial"
-                entry["match_tier"] = "close"
-                if trace is not None:
-                    trace.error(
-                        "self-check",
-                        RuntimeError("Downgraded an unverified or below-threshold full result"),
-                    )
             safe_results.append(entry)
         all_results = safe_results
         if trace is not None:
@@ -2970,74 +2857,40 @@ def index():
                 entry for entry in all_results
                 if str(entry["movie"]["id"]) in title_match_ids
             ]
+        exact_title_ids = set()
+        series_ids = set()
+        if title_match_ids and title_query_is_exact:
+            exact_title_ids = {
+                str(movie["id"]) for movie in title_matches
+                if _contains_complete_title(title_search_query, movie["title"])
+            }
+            if not exact_title_ids:
+                exact_title_ids.add(str(title_matches[0]["id"]))
+            if len(title_matches) > 1 and not embedded_title_intent:
+                series_ids = title_match_ids - exact_title_ids
+                exact_title_ids.update(series_ids)
+        all_results = finalize_results(
+            all_results,
+            candidate_by_id,
+            ranking_preferences,
+            exact_title_ids=exact_title_ids,
+            title_match_ids=title_match_ids,
+            series_ids=series_ids,
+            series_title=title_search_query.strip(),
+            title_prefix=title_prefix_query,
+            selected_genres=selected_genres,
+            ranking_intent=query_analysis.get("ranking_intent", ""),
+        )
+        all_results = [
+            entry for entry in all_results
+            if str(entry["movie"].get("id")) in eligible_ids
+            and not _final_gate_violations(entry["movie"], query_preferences)
+        ]
         exact_results = [entry for entry in all_results if entry["match_level"] == "full"]
-        if title_matches:
-            title_order = {str(movie["id"]): index for index, movie in enumerate(title_matches)}
-            all_results.sort(key=lambda entry: (
-                title_order.get(str(entry["movie"]["id"]), len(title_order)),
-                -(entry["movie"].get("vote_count") or 0),
-                str(entry["movie"].get("title", "")).casefold(),
-                str(entry["movie"].get("id", "")),
-            ))
-        elif understanding.get("similar_to"):
-            if exact_results:
-                all_results = exact_results
-            all_results.sort(key=lambda entry: (
-                -candidate_by_id[str(entry["movie"]["id"])]["search_score"],
-                str(entry["movie"].get("title", "")).casefold(),
-                str(entry["movie"].get("id", "")),
-            ))
-            context["result_count_label"] = f"{len(all_results)} closest matches"
-        elif exact_results:
-            all_results.sort(key=lambda entry: (
-                -len(set(selected_genres).intersection(set(entry["movie"].get("genres", [])))),
-                -entry["percent"],
-                -entry.get("evidence_strength", 0.0),
-                -(entry["movie"].get("average_rating") or 0),
-                -(entry["movie"].get("vote_count") or 0),
-                str(entry["movie"].get("title", "")).casefold(),
-                str(entry["movie"].get("id", "")),
-            ))
-        else:
-            all_results.sort(key=lambda entry: (
-                -len(set(selected_genres).intersection(set(entry["movie"].get("genres", [])))),
-                -entry["percent"],
-                -entry.get("evidence_strength", 0.0),
-                -(entry["movie"].get("average_rating") or 0),
-                -(entry["movie"].get("vote_count") or 0),
-                str(entry["movie"].get("title", "")).casefold(),
-                str(entry["movie"].get("id", "")),
-            ))
-        context["result_tier_counts"] = _result_tier_counts(all_results)
-        context["result_count_label"] = ", ".join(
-            f'{context["result_tier_counts"][tier]} {tier}'
-            for tier in ("exact", "close", "related")
+        context["result_tier_counts"] = tier_counts(all_results)
+        context["result_count_label"] = tier_count_label(
+            all_results, selected_genres,
         )
-        unverified_count = sum(
-            bool(entry.get("filter_unverified")) for entry in all_results
-        )
-        if unverified_count:
-            context["result_count_label"] += f" — {unverified_count} unverified"
-        if selected_genres:
-            all_count = sum(
-                1 for entry in all_results
-                if set(selected_genres).issubset(set(entry["movie"].get("genres", [])))
-            )
-            partial_count = len(all_results) - all_count
-            if all_count:
-                genre_count_label = f"{all_count} match all selected genres, {partial_count} match some"
-            else:
-                genre_count_label = f"0 match all selected genres, {partial_count} match some"
-            context["result_count_label"] += " — " + genre_count_label
-        if query_analysis["ranking_intent"] and not title_matches and not understanding.get("similar_to"):
-            all_results.sort(key=lambda entry: (
-                str(entry["movie"].get("title", "")).casefold(),
-                str(entry["movie"].get("id", "")),
-            ))
-            all_results.sort(key=lambda entry: (
-                ranking_key(entry, query_analysis["ranking_intent"]), entry["final_score"]
-            ), reverse=True)
-        all_results.sort(key=lambda entry: bool(entry.get("filter_unverified")))
         total_pages = max(1, math.ceil(len(all_results) / per_page))
         page_number = min(page_number, total_pages)
         start = (page_number - 1) * per_page
@@ -3070,39 +2923,10 @@ def index():
                     ),
                     "contradicted": False,
                 }
-            cast_supported = _run_search_stage(
-                "verify",
-                lambda movie=movie: bool(
-                    cast_constraint and not negative_cast_constraint
-                    and evaluate_cast_constraint(movie, cast_constraint)
-                ),
-                False,
-                trace,
-            )
-            reasons = _run_search_stage(
-                "explain",
-                lambda: build_match_reasons(
-                    movie,
-                    ranking_preferences,
-                    entry.get("breakdown", {}),
-                    entry.get("satisfied", []),
-                    cast_supported=cast_supported,
-                ),
-                [{"ok": False, "text": entry.get("match_reason", "Closest available catalog result.")}],
-                trace,
-            )
-            if selected_genres:
-                missing = [
-                    genre for genre in selected_genres
-                    if genre not in movie.get("genres", [])
-                ]
-                if missing:
-                    reasons = list(reasons) + [{
-                        "ok": False,
-                        "text": "Missing: " + ", ".join(title_case(genre) for genre in missing),
-                    }]
-            if entry.get("verification_fallback") and not reasons:
-                reasons = [{"ok": False, "text": entry["match_reason"]}]
+            reasons = entry.get("reasons") or [{
+                "ok": False,
+                "text": "No direct evidence in available catalog fields",
+            }]
             display_results.append({
                 "rank": rank,
                 "movie": movie,
@@ -3121,7 +2945,7 @@ def index():
                     "close": "Closest match",
                     "related": "Related match",
                 }[entry["match_tier"]],
-                "genre_match_count": len(set(selected_genres).intersection(set(movie.get("genres", [])))) ,
+                "genre_match_count": entry["genre_match_count"],
                 "show_unverified_badge": (
                     bool(
                         entry.get("filter_unverified")
@@ -3270,7 +3094,7 @@ def index():
             ]
         if search_notice:
             message = context.get("assistant_message", "")
-            for sentence in search_notice.split(". "):
+            for sentence in re.split(r"(?<=\.)\s+", search_notice):
                 sentence = sentence.strip()
                 if sentence and sentence.casefold() not in message.casefold():
                     message = f"{message} {sentence}".strip()
@@ -3281,16 +3105,7 @@ def index():
         total_pages = max(1, math.ceil(len(filtered_movies) / per_page))
         page_number = min(page_number, total_pages)
         start = (page_number - 1) * per_page
-        browse_source = sorted(
-            filtered_movies,
-            key=lambda movie: (
-                -len(set(selected_genres).intersection(set(movie.get("genres", [])))) ,
-                -(movie.get("average_rating") or 0),
-                -(movie.get("vote_count") or 0),
-                str(movie.get("title", "")).casefold(),
-                str(movie.get("id", "")),
-            ),
-        )
+        browse_source = order_browse_movies(filtered_movies, selected_genres)
         context.update({
             "movies": [
                 {"movie": movie, "poster_exists": poster_exists(movie)}

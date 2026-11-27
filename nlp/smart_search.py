@@ -42,6 +42,7 @@ from .similarity import cosine_similarity, vector_norm
 from .tfidf import build_tfidf_model, simple_word_tokens, vectorize_query
 from .tokenize import tokenize
 from .catalog_matching import normalize_title
+from .match_policy import MATCH_THRESHOLDS
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -49,7 +50,7 @@ EMBEDDINGS_PATH = ROOT_DIR / "data" / "movie_embeddings.json.gz"
 MAX_QUERY_LENGTH = 500
 MAX_CANDIDATES = 30
 # A full label requires verified constraints, strong term evidence, and >=80%.
-EXACT_MATCH_THRESHOLD = 80
+EXACT_MATCH_THRESHOLD = MATCH_THRESHOLDS["exact"]
 CACHE_SECONDS = 600
 CACHE_SIZE = 512
 RATE_LIMIT_REQUESTS = 30
@@ -1149,6 +1150,8 @@ def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limi
             return [{
                 "movie": movie,
                 "search_score": score / similar[0][0] * 100,
+                "similarity_score": score / similar[0][0] * 100,
+                "similarity_source_title": understanding.get("similar_to"),
                 "match_reason": f"TF-IDF metadata similarity to {understanding.get('similar_to')}.",
                 "relevance_score": score,
                 "query_evidence": {
