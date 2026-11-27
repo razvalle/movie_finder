@@ -1,5 +1,5 @@
 (() => {
-  const SEARCH_REQUEST_TIMEOUT_MS = 12000;
+  const SEARCH_REQUEST_TIMEOUT_MS = 70000;
   const form = document.querySelector(".search__form");
   if (!form) return;
 

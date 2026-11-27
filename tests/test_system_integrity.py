@@ -203,8 +203,8 @@ class SystemIntegrityTests(unittest.TestCase):
         javascript = (
             ROOT / "static" / "js" / "smart-search.js"
         ).read_text(encoding="utf-8")
-        self.assertIn("const SEARCH_REQUEST_TIMEOUT_MS = 12000;", javascript)
-        self.assertGreater(12.0, SEARCH_BUDGET_SECONDS)
+        self.assertIn("const SEARCH_REQUEST_TIMEOUT_MS = 70000;", javascript)
+        self.assertGreater(70.0, SEARCH_BUDGET_SECONDS)
 
     def test_shared_chip_links_ignore_unlisted_parameters(self):
         tag = {"key": "genre:mystery", "label": "Genre", "value": "Mystery"}

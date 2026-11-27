@@ -100,8 +100,20 @@ Final fresh-process stage timings for the exact query:
 
 Warm exact-query stage timings are bypassed by the in-process page cache.
 
-The performance suite is not yet deployed to Render in this report. The local
-targets now pass:
+The deployed bundle is live. A 20-request external HTTP run after deployment
+returned HTTP 200 for all requests; the first request was a cold/waking instance
+request and took 17.754 s with the incomplete-results notice. The remaining 19
+requests took 264 ms-2.303 s end-to-end (median 314.52 ms, nearest-rank p95
+2.303 s, max 2.303 s). This measurement includes network transfer and cache
+misses across workers; it is not server-only processing time. No further
+`Search took too long` notice appeared in that run. Render free services can
+spin down after 15 idle minutes and take about a minute to wake, so a first
+request after idle cannot meet the under-3-second host-wide target on that plan.
+The client timeout is now 70 seconds to allow the documented free-tier wake
+period; the server's 10-second cooperative budget remains lower and partial
+results are returned when its stage checks can run.
+
+The local targets now pass:
 
 - p50: under 150 ms
 - p95: under 400 ms
@@ -132,10 +144,11 @@ fix.
 | Limit | Value | Location |
 |---|---:|---|
 | Server cooperative budget | 10 seconds | `nlp/search_diagnostics.py` |
-| Client abort | 12 seconds | `static/js/smart-search.js` |
+| Client abort | 70 seconds | `static/js/smart-search.js` |
 | Render/Gunicorn host limit | No app-level override is configured | `render.yaml` start command |
 
-The client is intentionally 2 seconds longer than the server cooperative budget.
+The client is intentionally longer than the server cooperative budget and gives
+the Render free instance time to wake.
 The partial-result notice remains available from the existing server cooperative
 fallback. Normal searches are served from the cache or normally complete before
 the browser timeout.
