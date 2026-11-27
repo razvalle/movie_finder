@@ -125,14 +125,15 @@ def _movie_tag_text_fields(movie):
     return [value for value in fields if value]
 
 
-def _concept_forms(tag, preferred_table=None):
-    tables = (
-        preferred_table,
-        GENRE_SYNONYMS,
-        MOOD_SYNONYMS,
-        THEME_SYNONYMS,
-        CONTENT_DESCRIPTOR_SYNONYMS,
-    )
+_GLOBAL_SYNONYM_TABLES = (
+    GENRE_SYNONYMS,
+    MOOD_SYNONYMS,
+    THEME_SYNONYMS,
+    CONTENT_DESCRIPTOR_SYNONYMS,
+)
+
+
+def _build_concept_forms(tag, tables):
     forms = {tag}
     for table in tables:
         if not table:
@@ -147,6 +148,21 @@ def _concept_forms(tag, preferred_table=None):
             if related_forms.intersection(group):
                 forms.update(group)
     return forms
+
+
+@lru_cache(maxsize=4096)
+def _cached_global_concept_forms(tag):
+    return frozenset(_build_concept_forms(tag, _GLOBAL_SYNONYM_TABLES))
+
+
+def _concept_forms(tag, preferred_table=None):
+    if preferred_table is None or any(
+        preferred_table is table for table in _GLOBAL_SYNONYM_TABLES
+    ):
+        return set(_cached_global_concept_forms(tag))
+    return _build_concept_forms(
+        tag, (preferred_table, *_GLOBAL_SYNONYM_TABLES),
+    )
 
 
 def _movie_contains_concept(movie, tag, preferred_table=None):
