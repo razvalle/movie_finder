@@ -1,7 +1,7 @@
 {
   "negation_cues": [
     "not", "no", "without", "except", "excluding", "avoid", "avoiding",
-    "exclude", "skip", "skipping", "anything but", "other than",
+    "exclude", "skip", "skipping", "anything but", "other than", "-",
     "instead of", "rather than", "free of", "free from", "-free", "non-",
     "walang", "huwag", "wag", "ayaw", "ayoko", "hindi", "bawal"
   ],

@@ -14,7 +14,7 @@ from app import (
     find_title_matches,
 )
 from data.movies import MOVIES
-from nlp.extract import extract_preferences
+from nlp.extract import extract_preferences, remove_negated_terms
 from nlp.query import build_structured_query
 from nlp.runtime import (
     extract_runtime_constraint,
@@ -93,8 +93,8 @@ class QueryUnderstandingTests(unittest.TestCase):
         for query in unqualified_queries:
             with self.subTest(query=query):
                 preferences = extract_preferences(query)
-                self.assertEqual(preferences["excluded_genres"], [])
-                self.assertTrue(preferences["ambiguous_interpretations"][0]["negated"])
+                self.assertIn("horror", preferences["excluded_genres"])
+                self.assertNotIn("genre:horror", preferences["soft_exclusions"])
         for query in (
             "horror movies no thanks",
             "no horror movies please",
@@ -107,9 +107,23 @@ class QueryUnderstandingTests(unittest.TestCase):
                 self.assertIn("horror", extract_preferences(query)["excluded_genres"])
         free_of = extract_preferences("gore-free horror")
         self.assertIn("violence", free_of["excluded_content_descriptors"])
-        self.assertNotIn("horror", free_of["excluded_genres"])
+        self.assertIn("horror", free_of["genres"])
         self.assertTrue(extract_preferences("avoid")["unclear_negation"])
         self.assertFalse(extract_preferences("no thanks")["unclear_negation"])
+
+    def test_comma_and_hyphen_negation_preserve_polarity(self):
+        for query in (
+            "mystery, not horror",
+            "mystery -horror",
+            "mystery without horror",
+            "no horror, mystery",
+        ):
+            with self.subTest(query=query):
+                preferences = extract_preferences(query)
+                self.assertEqual(preferences["genres"], ["mystery"])
+                self.assertEqual(preferences["excluded_genres"], ["horror"])
+                self.assertNotIn("horror", preferences["free_text_keywords"])
+                self.assertNotIn("horror", remove_negated_terms(query, preferences))
 
     def test_vague_runtime_uses_catalog_percentiles_and_displays_boundary(self):
         synthetic = [80, 90, 100, 110]

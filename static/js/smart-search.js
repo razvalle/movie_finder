@@ -281,6 +281,23 @@
   let sliderQuery = "";
   let sliderStarted = false;
   const sliderTouched = new Set();
+  function assertDisplayedExclusions() {
+    let expected = [];
+    try {
+      expected = JSON.parse(form.dataset.enforcedExclusions || "[]");
+    } catch {
+      console.assert(false, "Search exclusions were not valid server data.");
+      return;
+    }
+    const displayed = [...document.querySelectorAll(".pref-tag--exclude[data-preference-key]")]
+      .map((tag) => tag.dataset.preferenceKey)
+      .filter((key) => key.startsWith("exclude_"))
+      .sort();
+    console.assert(
+      JSON.stringify(displayed) === JSON.stringify([...expected].sort()),
+      "Displayed exclusions do not match server-enforced exclusions.",
+    );
+  }
   const sliderPatterns = {
     "runtime-range": /\b(?:under|below|less than|over|above|more than|at most|at least)\s+\d+\s*(?:minutes?|hours?|mins?|hrs?)\b/gi,
     "year-range": /\b(?:from|after|since|before|in)\s+\d{4}(?:\s*(?:to|through|until|-)\s*\d{4})?\b/gi,
@@ -306,9 +323,7 @@
       const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const match = new RegExp(`\\b${escaped}\\b`, "gi");
       for (const found of value.matchAll(match)) {
-        const prefix = value.slice(Math.max(0, found.index - 28), found.index);
-        const detectedType = /\b(?:no|not|without|excluding|exclude|avoid|avoiding)\s+(?:any\s+)?(?:\w+\s+){0,1}$/i.test(prefix) ? "exclude" : type;
-        rules.push({ start: found.index, end: found.index + found[0].length, type: detectedType });
+        rules.push({ start: found.index, end: found.index + found[0].length, type });
       }
     });
     for (const match of value.matchAll(/\b(?:under|below|less than|over|above|more than)\s+\d+\s*(?:minutes?|hours?|mins?|hrs?)\b|\b(?:from|after|since|before)\s+\d{4}\b/gi)) {
@@ -335,6 +350,7 @@
     highlightLayer.hidden = !value;
     searchInput.classList.toggle("has-highlight", Boolean(value));
     highlightLayer.scrollTop = searchInput.scrollTop;
+    assertDisplayedExclusions();
   }
 
   function bindViewToggle() {

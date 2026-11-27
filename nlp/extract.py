@@ -30,6 +30,7 @@ from .tokenize import STOPWORDS, tokenize, build_ngrams, remove_stopwords
 from .fuzzy import correct_unknown_token
 from .negation import (
     NEGATION_CUES,
+    NEGATION_CUE_BIGRAMS,
     find_negation_scopes,
     find_soft_negation_scopes,
     is_retroactively_negated,
@@ -60,6 +61,69 @@ _SYNONYM_TABLES = (
     ("theme", THEME_SYNONYMS),
     ("content_descriptor", CONTENT_DESCRIPTOR_SYNONYMS),
 )
+
+
+@lru_cache(maxsize=1)
+def _catalog_genre_surface_index():
+    from data.movies import MOVIES
+
+    surfaces = {}
+    genres = {
+        normalize_text(genre).replace(" , ", " ").strip()
+        for movie in MOVIES
+        for genre in movie.get("genres", [])
+        if isinstance(genre, str) and normalize_text(genre)
+    }
+    for genre in genres:
+        for surface in (genre, *GENRE_SYNONYMS.get(genre, ())):
+            normalized = normalize_text(surface).replace(" , ", " ").strip()
+            if normalized:
+                surfaces.setdefault(normalized, genre)
+    return surfaces
+
+
+def remove_negated_terms(raw_input, preferences=None):
+    """Return query text with negated targets removed before title matching."""
+    preferences = preferences or extract_preferences(raw_input)
+    tokens = preferences.get("tokens") or []
+    spans = list(preferences.get("negation_scopes") or [])
+    spans.extend(find_soft_negation_scopes(tokens))
+    removed = set()
+    cue_phrases = sorted(
+        NEGATION_CUE_BIGRAMS,
+        key=lambda phrase: len(phrase.split()),
+        reverse=True,
+    )
+    for start, end in spans:
+        removed.update(range(start, end + 1))
+        for rule in load_query_rules()["postposed_negation"]:
+            prefix, separator, suffix = rule["pattern"].partition("{term}")
+            prefix_tokens = prefix.split()
+            prefix_start = start - len(prefix_tokens)
+            if (
+                separator and prefix_tokens and prefix_start >= 0
+                and tokens[prefix_start:start] == prefix_tokens
+            ):
+                removed.update(range(prefix_start, start))
+            suffix_tokens = suffix.split()
+            suffix_start = end + 1
+            suffix_end = suffix_start + len(suffix_tokens)
+            if separator and suffix_tokens and tokens[suffix_start:suffix_end] == suffix_tokens:
+                removed.update(range(suffix_start, suffix_end))
+                break
+        for phrase in cue_phrases:
+            cue_tokens = phrase.split()
+            cue_start = start - len(cue_tokens)
+            if cue_start >= 0 and tokens[cue_start:start] == cue_tokens:
+                removed.update(range(cue_start, start))
+                break
+        else:
+            cue_start = start - 1
+            if cue_start >= 0 and tokens[cue_start] in NEGATION_CUES:
+                removed.add(cue_start)
+    return " ".join(
+        token for index, token in enumerate(tokens) if index not in removed
+    )
 
 
 def strip_non_informative_phrases(value):
@@ -359,6 +423,38 @@ def _extract_preferences_uncached(raw_input, allow_fuzzy_correction=True):
             softly_negated = is_within_negation_scope(
                 start, end, soft_negation_scopes,
             )
+            has_other_negated_concept = any(
+                (other["start_index"], other["end_index"]) != (start, end)
+                and (
+                    _catalog_genre_surface_index().get(other["phrase"])
+                    or REVERSE_INDEX.get(other["phrase"])
+                )
+                and (
+                    is_within_negation_scope(
+                        other["start_index"], other["end_index"], negation_scopes,
+                    )
+                    or is_within_negation_scope(
+                        other["start_index"], other["end_index"], soft_negation_scopes,
+                    )
+                    or is_retroactively_negated(other["end_index"], tokens)
+                )
+                for other in ngrams
+            )
+            catalog_genre = (
+                _catalog_genre_surface_index().get(ngram["phrase"])
+                or _catalog_genre_surface_index().get(hit_phrase)
+            )
+            if catalog_genre and (
+                negated or softly_negated or has_other_negated_concept
+            ):
+                if softly_negated:
+                    soft_exclusions.add(f"genre:{catalog_genre}")
+                elif negated:
+                    excluded_genres.add(catalog_genre)
+                else:
+                    genres.add(catalog_genre)
+                claimed_indices.update(range(start, end + 1))
+                continue
             interpretation = {
                 "surface": ngram["phrase"],
                 "category": hit["category"],

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import _run_search_stage, movie_matches_runtime_limits
+from app import _final_gate_violations, _run_search_stage, movie_matches_runtime_limits
 from data.movies import _restore_curated_search_metadata, normalize_movie_record
 from data.synonyms import CONTENT_DESCRIPTOR_SYNONYMS, GENRE_SYNONYMS, MOOD_SYNONYMS, THEME_SYNONYMS
 from nlp.extract import extract_preferences
@@ -30,6 +30,7 @@ from nlp.smart_search import (
     _query_terms,
     local_understanding,
     retrieve_candidates,
+    retrieve_plain_candidates,
 )
 from nlp.tfidf import build_tfidf_model, load_or_build_tfidf_model
 
@@ -153,7 +154,26 @@ class RuntimeConstraintTests(unittest.TestCase):
         self.assertEqual(preferences["runtime"]["max"], 89)
         self.assertEqual(structured["genres"], ["comedy"])
         self.assertEqual(structured["free_text_keywords"], [])
-        self.assertIn("genre:horror", negated["soft_exclusions"])
+        self.assertEqual(negated["excluded_genres"], ["horror"])
+
+    def test_negated_genre_is_removed_from_fallback_retrieval_and_final_gate(self):
+        query = "mystery, not horror"
+        understanding = local_understanding(query)
+        safe = movie("safe", "Quiet Clue", "A mystery investigation.", 90)
+        safe["genres"] = ["mystery"]
+        excluded = movie("excluded", "Quiet Clue Two", "A mystery investigation.", 90)
+        excluded["genres"] = ["mystery", "horror"]
+        candidates = retrieve_plain_candidates(
+            query, understanding, [safe, excluded], limit=10,
+        )
+
+        self.assertEqual([item["movie"]["id"] for item in candidates], ["safe"])
+        self.assertNotIn("horror", candidates[0]["normalized_terms"])
+        self.assertEqual(
+            _final_gate_violations(excluded, understanding["filters"]),
+            ["excluded_genres:horror"],
+        )
+        self.assertEqual(_final_gate_violations(safe, understanding["filters"]), [])
 
     def test_constraint_scores_and_verification_survive_expired_budget(self):
         query = "under 90 minutes, comedy, nothing else matters"

@@ -154,10 +154,16 @@ def is_within_negation_scope(start_index, end_index, scopes):
 
 
 def is_retroactively_negated(end_index, tokens):
-    """Handles phrases like "horror movies are not wanted"."""
-    for index in range(end_index + 1, min(len(tokens), end_index + 5)):
-        if tokens[index] == "," or tokens[index] in SCOPE_BREAKERS:
-            return False
-        if tokens[index] == "not":
+    """Match only data-configured postposed negation patterns."""
+    for rule in _QUERY_RULES["postposed_negation"]:
+        if rule.get("scope") != "term":
+            continue
+        _, separator, suffix = rule["pattern"].partition("{term}")
+        suffix_tokens = suffix.split()
+        if not separator or not suffix_tokens:
+            continue
+        start = end_index + 1
+        end = start + len(suffix_tokens)
+        if tokens[start:end] == suffix_tokens:
             return True
     return False

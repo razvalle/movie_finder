@@ -194,12 +194,17 @@ class AmbiguousWordTests(unittest.TestCase):
         self.assertIn("relaxing", understanding["keywords"])
         self.assertNotIn("relaxing", understanding["required_terms"])
         self.assertIn("light", _catalog_ambiguous_terms())
+        self.assertIn("comedy", _catalog_ambiguous_terms())
+        self.assertEqual(local_understanding("comedy")["genres"], [])
+        self.assertEqual(
+            local_understanding("not comedy")["filters"]["excluded_genres"],
+            ["comedy"],
+        )
 
         clarified = extract_preferences("light comedy")
         self.assertIn("relaxing", clarified["moods"])
         self.assertIn("comedy", clarified["genres"])
         self.assertEqual(clarified["ambiguous_interpretations"], [])
-        self.assertEqual(local_understanding("comedy")["genres"], [])
 
     def test_synonym_category_collisions_are_detected_from_tables(self):
         self.assertIn("comedy", _catalog_ambiguous_terms())

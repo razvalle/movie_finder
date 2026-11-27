@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import sys
+from itertools import combinations
 from pathlib import Path
 
 
@@ -22,6 +23,7 @@ from nlp.normalize import normalize_text
 from nlp.query import build_structured_query, detect_country
 from nlp.runtime import extract_runtime_constraint
 from nlp.tokenize import STOPWORDS
+from nlp.smart_search import _filter_excluded_movies
 
 try:
     from nlp.runtime import WORD_NUMBERS
@@ -62,6 +64,132 @@ def _case(category, query, passed):
         f"{category}:{query}".encode("utf-8")
     ).hexdigest()[:2], 16) % 5 == 0 else "tuning"
     return {"category": category, "query": query, "split": split, "passed": bool(passed)}
+
+
+def _catalog_genres():
+    return sorted({
+        normalize_text(genre).replace(" , ", " ").strip()
+        for movie in app.MOVIES
+        for genre in movie.get("genres", [])
+        if isinstance(genre, str) and normalize_text(genre)
+    })
+
+
+def _oracle_forms(tag):
+    forms = {normalize_title(tag)}
+    tables = (
+        GENRE_SYNONYMS, MOOD_SYNONYMS, THEME_SYNONYMS,
+        CONTENT_DESCRIPTOR_SYNONYMS,
+    )
+    changed = True
+    while changed:
+        changed = False
+        for table in tables:
+            for canonical, synonyms in table.items():
+                linked = {
+                    normalize_title(value)
+                    for value in (canonical, *synonyms)
+                    if normalize_title(value)
+                }
+                if forms.intersection(linked) and not linked.issubset(forms):
+                    forms.update(linked)
+                    changed = True
+    for phrase in tuple(forms):
+        variants = [""]
+        for word in phrase.split():
+            word_forms = {word}
+            if len(word) > 4 and word.endswith("ies"):
+                word_forms.add(word[:-3] + "y")
+            elif len(word) > 3 and word.endswith("y"):
+                word_forms.add(word[:-1] + "ies")
+                word_forms.add(word + "s")
+            elif len(word) > 4 and word.endswith(("ches", "shes", "sses", "xes", "zes")):
+                word_forms.add(word[:-2])
+            elif len(word) > 3 and word.endswith("s"):
+                word_forms.add(word[:-1])
+            elif len(word) > 2:
+                word_forms.add(word + "s")
+                if word.endswith("y"):
+                    word_forms.add(word[:-1] + "ies")
+            variants = [
+                f"{prefix} {word_form}".strip()
+                for prefix in variants
+                for word_form in word_forms
+            ]
+        forms.update(variants)
+    return forms
+
+
+def _oracle_excludes(movie, excluded_genres, forms_by_genre):
+    fields = [
+        movie.get("title", ""), movie.get("original_title", ""),
+        movie.get("synopsis", ""), movie.get("overview", ""),
+        movie.get("tagline", ""), movie.get("certification", ""),
+        movie.get("content_rating", ""), movie.get("rating_certificate", ""),
+        movie.get("nationality", ""), movie.get("quality", ""),
+    ]
+    for key in (
+        "genres", "themes", "mood_tags", "keywords", "content_descriptors",
+        "production_countries", "origin_regions", "notable_awards", "cast", "actors",
+    ):
+        value = movie.get(key)
+        if isinstance(value, str):
+            fields.append(value)
+        elif isinstance(value, list):
+            fields.extend(
+                item if isinstance(item, str) else " ".join(
+                    str(child) for child in item.values() if isinstance(child, str)
+                ) if isinstance(item, dict) else ""
+                for item in value
+            )
+    haystack = " " + " ".join(normalize_title(value) for value in fields if value) + " "
+    return any(
+        f" {form} " in haystack
+        for tag in excluded_genres
+        for form in forms_by_genre[tag]
+    )
+
+
+def _genre_exclusion_filter_cases():
+    genres = _catalog_genres()
+    forms_by_genre = {genre: _oracle_forms(genre) for genre in genres}
+    exclusion_sets = [
+        excluded
+        for size in (1, 2, 3)
+        for excluded in combinations(genres, size)
+    ]
+    filtered_ids = {}
+    oracle_ids = {}
+    gate_clear = {}
+    for genre in genres:
+        preferences = extract_preferences(f"not {genre}")
+        oracle_ids[genre] = {
+            str(movie.get("id"))
+            for movie in app.MOVIES
+            if not _oracle_excludes(movie, (genre,), forms_by_genre)
+        }
+        candidates = _filter_excluded_movies(
+            app.MOVIES, {"filters": preferences},
+        )
+        filtered_ids[genre] = {str(movie.get("id")) for movie in candidates}
+        gate_clear[genre] = all(
+            not app._final_gate_violations(movie, preferences)
+            for movie in candidates
+        )
+    cases = []
+    for excluded in exclusion_sets:
+        query = ", ".join(f"not {genre}" for genre in excluded)
+        preferences = extract_preferences(query)
+        expected = set.intersection(*(oracle_ids[genre] for genre in excluded))
+        actual = set.intersection(*(filtered_ids[genre] for genre in excluded))
+        cases.append(_case(
+            "genre_exclusion_filter",
+            query,
+            set(excluded).issubset(preferences["excluded_genres"])
+            and actual == expected
+            and all(gate_clear[genre] for genre in excluded),
+        ))
+    return cases
 
 
 def _query_rules():
@@ -179,9 +307,9 @@ def generate_cases():
         }),
     ))
 
-    for genre in GENRE_SYNONYMS:
-        forms = GENRE_SYNONYMS[genre]
-        term = forms[0] if forms else genre
+    catalog_genres = _catalog_genres()
+    for genre in catalog_genres:
+        term = genre
         queries = [
             f"{cue} {term}"
             for cue in (
@@ -192,6 +320,7 @@ def generate_cases():
             )
         ]
         queries.extend((
+            f"-{term}",
             f"non-{term}",
             f"{term} no thanks",
             f"no {term} please",
@@ -223,6 +352,53 @@ def generate_cases():
                     query,
                     f"genre:{genre}" in preferences.get("soft_exclusions", []),
                 ))
+
+    for genre in catalog_genres:
+        for excluded in catalog_genres:
+            if genre == excluded:
+                continue
+            queries = (
+                f"{genre}, not {excluded}",
+                f"not {excluded}, {genre}",
+                f"{genre} but not {excluded}",
+                f"{genre} without {excluded}",
+                f"no {excluded}, {genre}",
+                f"suspenseful {genre}, not {excluded}",
+                f"{genre} and not {excluded}",
+                f"{genre}, not {excluded}, under 90 minutes",
+                f"{genre}, not {excluded}, from 2000 to 2010",
+            )
+            for query in queries:
+                preferences = extract_preferences(query)
+                cases.append(_case(
+                    "genre_pair_scope",
+                    query,
+                    genre in preferences["genres"]
+                    and excluded in preferences["excluded_genres"]
+                    and genre not in preferences["excluded_genres"],
+                ))
+
+    for genre in catalog_genres:
+        for excluded in catalog_genres:
+            if excluded == genre:
+                continue
+            for second_excluded in catalog_genres:
+                if second_excluded in {genre, excluded}:
+                    continue
+                queries = (
+                    f"{genre}, not {excluded} or {second_excluded}",
+                    f"{genre} without {excluded} or {second_excluded}",
+                    f"{genre}, not {excluded}, not {second_excluded}",
+                )
+                for query in queries:
+                    preferences = extract_preferences(query)
+                    cases.append(_case(
+                        "genre_triple_scope",
+                        query,
+                        genre in preferences["genres"]
+                        and excluded in preferences["excluded_genres"]
+                        and second_excluded in preferences["excluded_genres"],
+                    ))
 
     unclear_negation = extract_preferences("avoid")
     cases.append(_case(
@@ -316,6 +492,7 @@ def generate_cases():
             query,
             parsed["ranking_intent"] == expected,
         ))
+    cases.extend(_genre_exclusion_filter_cases())
     return cases
 
 

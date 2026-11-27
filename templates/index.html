@@ -75,7 +75,7 @@
   <main class="stage">
 
     <section class="search" aria-label="Movie search" data-i18n-aria="searchRegion">
-      <form class="search__form" action="{{ url_for('index') }}" method="get">
+      <form class="search__form" action="{{ url_for('index') }}" method="get" data-enforced-exclusions='{{ enforced_exclusion_keys|tojson|forceescape }}'>
         <label class="search__label" for="q" data-i18n="findLabel">Find a movie</label>
         <div class="search__row">
           <div class="search__entry">
@@ -222,7 +222,7 @@
         {% endif %}
         <div class="preferences__grid understood-strip" aria-label="Understood criteria">
           {% for tag in preference_tags %}
-            <span class="pref-tag pref-tag--{{ tag.type }}">
+            <span class="pref-tag pref-tag--{{ tag.type }}" data-preference-key="{{ tag.key or '' }}">
               {% if tag.type == 'include' %}<span class="pref-tag__sign" aria-hidden="true">+</span>{% elif tag.type == 'exclude' %}<span class="pref-tag__sign" aria-hidden="true">−</span>{% endif %}
               <span class="pref-tag__label">{{ tag.label }}</span>{{ tag.value }}
               {% if tag.remove_url %}<a class="pref-tag__remove" href="{{ tag.remove_url }}" aria-label="Remove {{ tag.label }} {{ tag.value }}" title="Remove">&times;</a>{% endif %}

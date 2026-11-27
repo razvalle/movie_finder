@@ -158,9 +158,15 @@ class SearchRouteTests(unittest.TestCase):
             conjunction = self.client.get("/?q=comedy+and+drama+movies&per_page=48")
             alternatives = self.client.get("/?q=comedy+or+drama+movies&per_page=48")
 
-        self.assertIn(b"Both Genres", conjunction.data)
-        self.assertNotIn(b"Comedy Only", conjunction.data)
-        self.assertNotIn(b"Drama Only", conjunction.data)
+        conjunction_titles = re.findall(
+            rb'data-detail-title="([^"]+)"', conjunction.data,
+        )
+        self.assertEqual(
+            conjunction_titles,
+            [b"Both Genres", b"Comedy Only", b"Drama Only"],
+        )
+        self.assertIn(b"Missing: Drama genre", conjunction.data)
+        self.assertIn(b"Missing: Comedy genre", conjunction.data)
         self.assertIn(b"Both Genres", alternatives.data)
         self.assertIn(b"Comedy Only", alternatives.data)
         self.assertIn(b"Drama Only", alternatives.data)
@@ -744,6 +750,26 @@ class SearchRouteTests(unittest.TestCase):
         self.assertNotIn(b"There Will Be Blood", response.data)
         self.assertNotIn(b"There's Something About Mary", response.data)
         self.assertNotIn(b"Related to there", response.data)
+
+    def test_negated_genre_is_hard_filtered_for_text_and_genre_chip_queries(self):
+        catalog = {movie["title"]: movie for movie in MOVIES}
+        for path in (
+            "/?q=mystery%2C+not+horror",
+            "/?genre=mystery&q=not+horror",
+        ):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                html = response.get_data(as_text=True)
+                titles = re.findall(
+                    r'<h3 class="movie-card__title">([^<]+)</h3>', html,
+                )
+                self.assertTrue(titles)
+                self.assertFalse(any(
+                    "horror" in (catalog.get(title, {}).get("genres") or [])
+                    for title in titles
+                ))
+                self.assertIn("exclude_genre:horror", html)
 
     def test_no_women_query_shows_conflicting_alternative_when_none_pass(self):
         movie = {

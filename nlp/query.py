@@ -254,7 +254,7 @@ def detect_cast_gender_constraint(normalized_text):
 
 def _build_structured_query_uncached(raw_query, content_text=None, allow_fuzzy_correction=True):
     """Return the explicit filters, ranking intent, and semantic residual text."""
-    normalized = strip_non_informative_phrases(raw_query).replace(",", " ")
+    normalized = strip_non_informative_phrases(raw_query)
     country, country_phrase = detect_country(normalized)
     ranking_intent, ranking_phrase = detect_ranking_intent(normalized)
     cleaned = strip_non_informative_phrases(

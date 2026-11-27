@@ -459,8 +459,26 @@ def local_understanding(raw_query, exact_search=False):
 def interpret_query(raw_query, exact_search=False):
     raw_query = raw_query[:MAX_QUERY_LENGTH]
     normalized_query = normalize_text(raw_query).casefold()
+    parsed = build_structured_query(
+        raw_query, allow_fuzzy_correction=not exact_search,
+    )["preferences"]
+    polarity = tuple(sorted(
+        (polarity, field, value)
+        for polarity, field in (
+            ("include", "genres"),
+            ("include", "moods"),
+            ("include", "themes"),
+            ("exclude", "excluded_genres"),
+            ("exclude", "excluded_moods"),
+            ("exclude", "excluded_themes"),
+            ("exclude", "excluded_content_descriptors"),
+            ("exclude", "excluded_keywords"),
+        )
+        for value in parsed.get(field, [])
+    ))
     cache_key = (
-        "understand", normalized_query, bool(exact_search), _STARTUP_CATALOG_KEY,
+        "understand", normalized_query, polarity,
+        bool(exact_search), _STARTUP_CATALOG_KEY,
     )
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -888,7 +906,27 @@ def _negative_query_terms(understanding):
         "excluded_content_descriptors", "excluded_keywords",
     ):
         phrases.extend(filters.get(key, []))
-    return set(simple_word_tokens(" ".join(str(phrase) for phrase in phrases)))
+    forms = {normalize_phrase(str(phrase)) for phrase in phrases if str(phrase).strip()}
+    tables = (
+        GENRE_SYNONYMS,
+        MOOD_SYNONYMS,
+        THEME_SYNONYMS,
+        CONTENT_DESCRIPTOR_SYNONYMS,
+    )
+    changed = True
+    while changed:
+        changed = False
+        for table in tables:
+            for canonical, synonyms in table.items():
+                related = {
+                    normalize_phrase(value)
+                    for value in (canonical, *synonyms)
+                    if normalize_phrase(value)
+                }
+                if forms.intersection(related) and not related.issubset(forms):
+                    forms.update(related)
+                    changed = True
+    return set(simple_word_tokens(" ".join(forms)))
 
 
 def _remove_negated_concepts(text):
@@ -1017,8 +1055,21 @@ def _similar_movie_terms(understanding, movies):
     return []
 
 
+def _filter_excluded_movies(movies, understanding):
+    filters = understanding.get("filters", {}) if understanding else {}
+    if not any(filters.get(key) for key in (
+        "excluded_genres", "excluded_moods", "excluded_themes",
+        "excluded_content_descriptors", "excluded_keywords",
+    )):
+        return movies
+    return [movie for movie in movies if not is_excluded(movie, filters)]
+
+
 def retrieve_candidates(raw_query, understanding, movies, tfidf_model=None, limit=MAX_CANDIDATES):
     """Rank candidates with local lexical similarity and title/entity hints."""
+    if not movies:
+        return []
+    movies = _filter_excluded_movies(movies, understanding)
     if not movies:
         return []
     if understanding.get("similar_to") and tfidf_model:
@@ -1286,15 +1337,20 @@ def retrieve_plain_candidates(raw_query, understanding, movies, tfidf_model=None
     """Retrieve direct lexical, fuzzy, title, then local TF-IDF fallbacks without expansion."""
     if not movies:
         return []
+    movies = _filter_excluded_movies(movies, understanding)
+    if not movies:
+        return []
     direct_understanding = dict(understanding or {})
     direct_understanding["expanded_concepts"] = []
     direct_understanding["keywords"] = []
     clean_query = strip_non_informative_phrases(raw_query[:MAX_QUERY_LENGTH])
     terms = _query_terms(clean_query, direct_understanding)
     if not terms:
+        negative_terms = _negative_query_terms(direct_understanding)
         terms = [
             term for term in _text_tokens(_remove_negated_concepts(clean_query))
             if term not in STOP_WORDS and term not in EXPLICIT_SYNTAX_TOKENS
+            and term not in negative_terms
             and len(term) > 1
         ]
     scores = {}

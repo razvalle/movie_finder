@@ -8,6 +8,7 @@ strips punctuation we don't need, and collapses whitespace.
 """
 
 import re
+from .catalog_matching import load_query_rules
 
 # Contractions must be expanded BEFORE punctuation stripping, otherwise
 # "don't" -> "dont" would silently lose the negation cue "not".
@@ -55,6 +56,8 @@ def normalize_text(raw_input):
 
     text = raw_input.lower().strip()
     text = text.replace("\u2019", "'").replace("\u2018", "'").replace("`", "'")
+    if "-" in load_query_rules()["negation_cues"]:
+        text = re.sub(r"(?<![\w-])-(?=[a-z0-9])", "not ", text)
     text = re.sub(r"\b([a-z][a-z-]*)-free\b", r"without \1 , ", text)
     text = re.sub(r"\bnon[- ]", "not ", text)
     text = re.sub(r"\bu\s*[.]?\s*k\s*[.]?(?=\W|$)", "uk", text)
