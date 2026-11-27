@@ -56,6 +56,28 @@ class SystemIntegrityTests(unittest.TestCase):
     def setUp(self):
         self.client = app_module.app.test_client()
 
+    def test_local_rate_limit_state_is_bounded(self):
+        from collections import OrderedDict
+        from nlp.smart_search import allow_search
+
+        with (
+            patch("nlp.smart_search._RATE_LIMITS", OrderedDict()),
+            patch("nlp.smart_search.RATE_LIMIT_MAX_CLIENTS", 3),
+            patch("nlp.smart_search._redis_client", return_value=None),
+        ):
+            for index in range(5):
+                self.assertTrue(allow_search(f"synthetic-client-{index}"))
+            self.assertEqual(len(app_module.smart_search_module._RATE_LIMITS), 3)
+
+    def test_render_uses_preloaded_recycled_single_worker_and_busy_guard(self):
+        render_config = (ROOT / "render.yaml").read_text(encoding="utf-8")
+        self.assertIn("--workers 1", render_config)
+        self.assertIn("--threads 2", render_config)
+        self.assertIn("--preload", render_config)
+        self.assertIn("--max-requests 250", render_config)
+        self.assertIn("--max-requests-jitter 50", render_config)
+        self.assertEqual(app_module.NORMAL_SEARCH_HTML_CACHE_SIZE, 32)
+
     def test_tfidf_cache_carries_complete_catalog_version(self):
         record = {
             "id": "synthetic-index-record",

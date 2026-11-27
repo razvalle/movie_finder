@@ -24,6 +24,7 @@ import heapq
 import logging
 import json
 import time
+import threading
 import unicodedata
 from collections import Counter
 from pathlib import Path
@@ -163,6 +164,8 @@ TITLE_INDEX = {}
 TITLE_EXACT_INDEX = {}
 TITLE_TOKEN_INDEX = {}
 _NORMAL_SEARCH_HTML_CACHE = {}
+NORMAL_SEARCH_HTML_CACHE_SIZE = 32
+_SEARCH_CONCURRENCY = threading.BoundedSemaphore(1)
 
 
 def _canonical_genre(value):
@@ -372,8 +375,8 @@ def _minimal_understanding(query, query_analysis):
     }
 
 
-def _emergency_search_response(query):
-    notice = (
+def _emergency_search_response(query, notice=None):
+    notice = notice or (
         "Search could not safely prepare results. No filters were relaxed. "
         "Remove a filter or try a shorter query."
     )
@@ -383,6 +386,32 @@ def _emergency_search_response(query):
         "search_notice": notice,
         "assistant_message": notice,
         "assistant_state": "empty",
+        "selected_genre": "",
+        "selected_genres": [],
+        "selected_awards": [],
+        "recognition_options": RECOGNITION_OPTIONS,
+        "selected_nationality": "",
+        "award_filter": False,
+        "alternative_queries": [],
+        "detected_nationality": "",
+        "filter_conflicts": [],
+        "similar_to_title": "",
+        "similar_series_members": [],
+        "like_title_suggestions": [],
+        "nationality_label": "",
+        "genres": sorted({
+            _canonical_genre(genre)
+            for movie in MOVIES for genre in movie.get("genres", [])
+        }),
+        "nationalities": sorted({
+            code
+            for movie in MOVIES for code in movie_country_codes(movie)
+            if code
+        }),
+        "nationality_labels": COUNTRY_LABELS,
+        "movie_origin_label": movie_origin_label,
+        "movie_poster_url": movie_poster_url,
+        "examples": EXAMPLE_QUERIES,
         "searched": True,
         "results": [],
         "movies": [],
@@ -394,7 +423,11 @@ def _emergency_search_response(query):
         "per_page": DEFAULT_PER_PAGE,
         "per_page_options": PER_PAGE_OPTIONS,
         "preference_tags": context.get("preference_tags", []),
-        "alternative_queries": context.get("alternative_queries", []),
+        "dropped": [],
+        "feedback_saved": False,
+        "debug_enabled": False,
+        "debug_view": None,
+        "query_debug": {},
     })
     try:
         response = make_response(render_template("index.html", **context), 200)
@@ -419,19 +452,34 @@ def _resilient_search(view):
         trace = SearchTrace(query)
         g.search_trace = trace
         g.search_context = None
+        if not _SEARCH_CONCURRENCY.acquire(blocking=False):
+            trace.error("concurrency", RuntimeError("Search capacity is busy"))
+            trace.fallback("busy-search")
+            response = _emergency_search_response(
+                query,
+                "Search is busy right now. Please try again shortly.",
+            )
+            write_search_record(trace.finish(
+                response.status_code,
+                getattr(g, "search_context", None),
+            ))
+            return response
         try:
-            response = make_response(view(*args, **kwargs))
-        except Exception as error:
-            trace.error(trace.stage, error)
-            trace.fallback("request-error")
-            response = _emergency_search_response(query)
-        if response.status_code >= 500:
-            trace.error("http-response", RuntimeError(f"Search returned HTTP {response.status_code}"))
-            trace.fallback("http-response")
-            response = _emergency_search_response(query)
-        record = trace.finish(response.status_code, getattr(g, "search_context", None))
-        write_search_record(record)
-        return response
+            try:
+                response = make_response(view(*args, **kwargs))
+            except Exception as error:
+                trace.error(trace.stage, error)
+                trace.fallback("request-error")
+                response = _emergency_search_response(query)
+            if response.status_code >= 500:
+                trace.error("http-response", RuntimeError(f"Search returned HTTP {response.status_code}"))
+                trace.fallback("http-response")
+                response = _emergency_search_response(query)
+            record = trace.finish(response.status_code, getattr(g, "search_context", None))
+            write_search_record(record)
+            return response
+        finally:
+            _SEARCH_CONCURRENCY.release()
     wrapped.__name__ = view.__name__
     return wrapped
 NATIONALITY_ALIASES = {
@@ -2179,7 +2227,7 @@ def index():
                 and "may be incomplete" not in str(context.get("search_notice", "")).casefold()
                 and "partial" not in str(context.get("search_notice", "")).casefold()
             ):
-                if len(_NORMAL_SEARCH_HTML_CACHE) >= 512:
+                if len(_NORMAL_SEARCH_HTML_CACHE) >= NORMAL_SEARCH_HTML_CACHE_SIZE:
                     oldest_key = next(iter(_NORMAL_SEARCH_HTML_CACHE))
                     del _NORMAL_SEARCH_HTML_CACHE[oldest_key]
                 _NORMAL_SEARCH_HTML_CACHE[html_cache_key] = rendered
@@ -2253,7 +2301,7 @@ def index():
                 and "may be incomplete" not in str(context.get("search_notice", "")).casefold()
                 and "may be incomplete" not in str(context.get("assistant_message", "")).casefold()
             ):
-                if len(_NORMAL_SEARCH_HTML_CACHE) >= 512:
+                if len(_NORMAL_SEARCH_HTML_CACHE) >= NORMAL_SEARCH_HTML_CACHE_SIZE:
                     oldest_key = next(iter(_NORMAL_SEARCH_HTML_CACHE))
                     del _NORMAL_SEARCH_HTML_CACHE[oldest_key]
                 _NORMAL_SEARCH_HTML_CACHE[html_cache_key] = rendered
@@ -3014,7 +3062,7 @@ def index():
         and "may be incomplete" not in str(context.get("search_notice", "")).casefold()
         and "may be incomplete" not in str(context.get("assistant_message", "")).casefold()
     ):
-        if len(_NORMAL_SEARCH_HTML_CACHE) >= 512:
+        if len(_NORMAL_SEARCH_HTML_CACHE) >= NORMAL_SEARCH_HTML_CACHE_SIZE:
             oldest_key = next(iter(_NORMAL_SEARCH_HTML_CACHE))
             del _NORMAL_SEARCH_HTML_CACHE[oldest_key]
         _NORMAL_SEARCH_HTML_CACHE[html_cache_key] = rendered

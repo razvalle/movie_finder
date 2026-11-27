@@ -14,6 +14,7 @@ from nlp.extract import (
     extract_preferences,
 )
 from nlp.fuzzy import correct_unknown_token
+from nlp.catalog_matching import detect_title_spans
 from nlp.scoring import is_excluded, overlap_fraction
 from nlp.smart_search import _query_evidence, local_understanding
 
@@ -63,6 +64,28 @@ def _is_inflectional_plural(word, candidate):
 
 
 class WholeWordMatchingTests(unittest.TestCase):
+    def test_title_span_index_preserves_long_and_protected_title_matches(self):
+        movies = [
+            {"id": "long", "title": "Silver Harbor", "alternate_titles": ["Harbor of Silver"]},
+            {"id": "short", "title": "Up"},
+            {"id": "numeric", "title": "1920"},
+        ]
+        short_words = {"up"}
+        cases = (
+            ("Silver Harbor", [("silver harbor", True)]),
+            ("a suspenseful Silver Harbor movie", [("silver harbor", False)]),
+            ("something up", []),
+            ('the film "Up"', [("up", True)]),
+            ("1920", [("1920", True)]),
+        )
+        for query, expected in cases:
+            with self.subTest(query=query):
+                spans = detect_title_spans(query, movies, short_words)
+                self.assertEqual(
+                    [(span["alias"], span["whole_query"]) for span in spans],
+                    expected,
+                )
+
     def test_substrings_in_catalog_tokens_are_not_matched(self):
         catalog_words = _catalog_words(MOVIES)
         vocabulary = catalog_words | _synonym_words()

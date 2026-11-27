@@ -355,6 +355,22 @@ class SearchRouteTests(unittest.TestCase):
         self.assertGreater(record["candidate_counts"]["filtered"], 0)
         self.assertNotIn("remote_addr", record)
 
+    def test_busy_search_returns_the_normal_page_with_retry_notice(self):
+        class BusySearch:
+            @staticmethod
+            def acquire(blocking=False):
+                return False
+
+        with (
+            patch("app._SEARCH_CONCURRENCY", BusySearch()),
+            patch("app.write_search_record"),
+        ):
+            response = self.client.get("/?q=synthetic+busy+query")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Search is busy right now. Please try again shortly.", response.data)
+        self.assertIn(b'class="search__form"', response.data)
+
     def test_explanation_exception_keeps_results_and_supplies_a_fallback_reason(self):
         with patch("app.build_match_reasons", side_effect=RuntimeError("explanation failed")):
             response = self.client.get("/?q=space+movies&per_page=12")

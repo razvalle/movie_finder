@@ -51,6 +51,7 @@ CACHE_SECONDS = 600
 CACHE_SIZE = 512
 RATE_LIMIT_REQUESTS = 30
 RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMIT_MAX_CLIENTS = 4096
 _REDIS_CLIENT = None
 _REDIS_URL = None
 _REDIS_LOCK = threading.Lock()
@@ -64,7 +65,7 @@ CONCEPT_TABLE = load_concept_table(_STARTUP_MOVIES)
 
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
-_RATE_LIMITS = defaultdict(deque)
+_RATE_LIMITS = OrderedDict()
 _RATE_LIMIT_LOCK = threading.Lock()
 _BM25_CACHE = {}
 _BM25_LOCK = threading.Lock()
@@ -223,13 +224,21 @@ def allow_search(client_id):
         except Exception as error:
             _LOGGER.warning("Shared search rate limit unavailable; using process-local limit: %s", error)
     now = time.monotonic()
+    client_id = str(client_id or "unknown")[:64]
     with _RATE_LIMIT_LOCK:
-        events = _RATE_LIMITS[client_id]
+        events = _RATE_LIMITS.get(client_id)
+        if events is None:
+            events = deque()
+            _RATE_LIMITS[client_id] = events
         while events and now - events[0] > RATE_LIMIT_WINDOW_SECONDS:
             events.popleft()
         if len(events) >= RATE_LIMIT_REQUESTS:
+            _RATE_LIMITS.move_to_end(client_id)
             return False
         events.append(now)
+        _RATE_LIMITS.move_to_end(client_id)
+        while len(_RATE_LIMITS) > RATE_LIMIT_MAX_CLIENTS:
+            _RATE_LIMITS.popitem(last=False)
         return True
 
 

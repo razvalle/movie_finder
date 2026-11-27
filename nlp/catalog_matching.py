@@ -83,20 +83,31 @@ def title_aliases(movie):
     return list(dict.fromkeys(alias for alias in aliases if alias))
 
 
-def build_title_index(movies):
-    """Map normalized canonical and alternate title spans to their movie records."""
+def _title_indexes(movies):
+    """Build normalized title and first-token indexes for catalog records."""
     cache_key = id(movies)
     cached = _TITLE_INDEX_CACHE.get(cache_key)
     if cached and cached[0] is movies:
-        return cached[1]
+        return cached[1], cached[2]
     index = {}
+    first_token_index = {}
     for movie in movies:
         for alias in title_aliases(movie):
-            index.setdefault(alias, []).append(movie)
+            records = index.setdefault(alias, [])
+            if not records:
+                first_token_index.setdefault(alias.split()[0], []).append(
+                    (alias, records, alias.split()),
+                )
+            records.append(movie)
     if len(_TITLE_INDEX_CACHE) >= 4:
         _TITLE_INDEX_CACHE.clear()
-    _TITLE_INDEX_CACHE[cache_key] = (movies, index)
-    return index
+    _TITLE_INDEX_CACHE[cache_key] = (movies, index, first_token_index)
+    return index, first_token_index
+
+
+def build_title_index(movies):
+    """Map normalized canonical and alternate title spans to their movie records."""
+    return _title_indexes(movies)[0]
 
 
 def detect_title_spans(query, movies, short_title_words=(), risky_title_vocabulary=None):
@@ -119,23 +130,20 @@ def detect_title_spans(query, movies, short_title_words=(), risky_title_vocabula
         normalize_title(match.group(1))
         for match in re.finditer(r"""['"]([^'"]{1,100})['"]""", raw)
     }
-    normalized_aliases = build_title_index(movies)
+    _, aliases_by_first_token = _title_indexes(movies)
     spans = []
-    for alias, records in normalized_aliases.items():
-        alias_words = alias.split()
-        if not alias_words:
-            continue
-        is_short_risky = (
-            len(alias.replace(" ", "")) <= 3
-            or alias in short_title_words
-            or all(word in short_title_words for word in alias_words)
-            or alias.isdigit()
-            or all(word.isdigit() for word in alias_words)
-        )
-        for start in range(len(words) - len(alias_words) + 1):
+    for start, first_word in enumerate(words):
+        for alias, records, alias_words in aliases_by_first_token.get(first_word, ()):
             end = start + len(alias_words)
             if words[start:end] != alias_words:
                 continue
+            is_short_risky = (
+                len(alias.replace(" ", "")) <= 3
+                or alias in short_title_words
+                or all(word in short_title_words for word in alias_words)
+                or alias.isdigit()
+                or all(word.isdigit() for word in alias_words)
+            )
             surrounding_words = words[:start] + words[end:]
             is_whole = alias in whole_keys or all(
                 word in fillers
