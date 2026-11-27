@@ -80,7 +80,11 @@ from nlp.smart_search import (
 from nlp.concepts import load_or_rebuild_concept_table, normalize_phrase
 from nlp import smart_search as smart_search_module
 from nlp.cast_verification import classify_cast_gender, evaluate_cast_constraint
-from nlp.search_diagnostics import SearchTrace, write_search_record
+from nlp.search_diagnostics import (
+    SEARCH_BUDGET_SECONDS,
+    SearchTrace,
+    write_search_record,
+)
 from nlp.catalog_matching import (
     SERIES_MEMBER_MATCH_PERCENT,
     detect_title_spans,
@@ -287,10 +291,6 @@ def _run_search_stage(
                 trace.stage_timings.get(name, 0.0) + elapsed_ms,
                 3,
             )
-    if trace is not None and trace.budget_exceeded and not complete_after_budget:
-        trace.report_budget_exceeded(name)
-        trace.fallback(name)
-        return fallback
     if trace is not None and trace.budget_exceeded:
         trace.report_budget_exceeded(name)
     return value
@@ -467,18 +467,8 @@ def _resilient_search(view):
         trace = SearchTrace(query)
         g.search_trace = trace
         g.search_context = None
-        if not _SEARCH_CONCURRENCY.acquire(blocking=False):
-            trace.error("concurrency", RuntimeError("Search capacity is busy"))
-            trace.fallback("busy-search")
-            response = _emergency_search_response(
-                query,
-                "Search is busy right now. Please try again shortly.",
-            )
-            write_search_record(trace.finish(
-                response.status_code,
-                getattr(g, "search_context", None),
-            ))
-            return response
+        _SEARCH_CONCURRENCY.acquire()
+        trace.deadline = time.perf_counter() + SEARCH_BUDGET_SECONDS
         try:
             try:
                 response = make_response(view(*args, **kwargs))
@@ -2312,7 +2302,9 @@ def index():
             pool.append(movie)
         return pool
 
-    filtered_movies = _run_search_stage("filter", search_pool, [], trace)
+    filtered_movies = _run_search_stage(
+        "filter", search_pool, [], trace, complete_after_budget=True,
+    )
     if trace is not None:
         trace.count("filtered", len(filtered_movies))
     search_notice = " ".join(part for part in (query_notice, *coverage_notices) if part)

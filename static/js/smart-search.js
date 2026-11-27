@@ -164,7 +164,7 @@
 
   function setSearchLoading(loading) {
     const results = document.querySelector(".results");
-    const list = results?.querySelector("[data-results-list]");
+    const list = results?.querySelector(".results__list");
     if (!results || !list) return;
     results.setAttribute("aria-busy", String(loading));
     list.querySelectorAll(".movie-card--skeleton").forEach((card) => card.remove());
@@ -615,6 +615,7 @@
       } catch (error) {
         if (version !== requestVersion) return;
         if (error.name === "AbortError") {
+          setSearchLoading(false);
           status.textContent = window.movieFinderText?.("searchSlow") || "Search took too long. Please try again.";
         } else {
           setSearchLoading(false);

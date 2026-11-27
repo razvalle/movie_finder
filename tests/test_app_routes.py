@@ -9,6 +9,7 @@ import sys
 import unittest
 import re
 import sqlite3
+import threading
 import tempfile
 from html import unescape
 from copy import deepcopy
@@ -30,10 +31,12 @@ from app import (
     find_title_matches,
     movie_poster_url,
     rank_movies,
+    _run_search_stage,
 )
 from data.generated_movies import GENERATED_MOVIES
 from data.movies import MOVIES
 from nlp.explain import explain_match
+from nlp.search_diagnostics import SearchTrace
 
 
 class SearchRouteTests(unittest.TestCase):
@@ -361,21 +364,81 @@ class SearchRouteTests(unittest.TestCase):
         self.assertGreater(record["candidate_counts"]["filtered"], 0)
         self.assertNotIn("remote_addr", record)
 
-    def test_busy_search_returns_the_normal_page_with_retry_notice(self):
-        class BusySearch:
-            @staticmethod
-            def acquire(blocking=False):
-                return False
+    def test_overlapping_search_waits_for_capacity_and_returns_results(self):
+        semaphore = threading.BoundedSemaphore(1)
+        semaphore.acquire()
+        waiting = threading.Event()
+        responses = []
+
+        class TrackingSemaphore:
+            def acquire(self, blocking=True):
+                waiting.set()
+                return semaphore.acquire(blocking=blocking)
+
+            def release(self):
+                semaphore.release()
+
+        def search():
+            with app.test_client() as client:
+                responses.append(client.get("/?q=mystery&per_page=12"))
 
         with (
-            patch("app._SEARCH_CONCURRENCY", BusySearch()),
+            patch("app._SEARCH_CONCURRENCY", TrackingSemaphore()),
             patch("app.write_search_record"),
         ):
-            response = self.client.get("/?q=synthetic+busy+query")
+            worker = threading.Thread(target=search)
+            worker.start()
+            started_waiting = waiting.wait(timeout=2)
+            try:
+                self.assertTrue(started_waiting)
+                self.assertTrue(worker.is_alive())
+            finally:
+                semaphore.release()
+                worker.join(timeout=10)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(responses[0].status_code, 200)
+        self.assertIn(b'class="movie-card"', responses[0].data)
+
+    def test_search_result_ids_are_independent_of_prior_query(self):
+        query = "A suspenseful mystery, not horror, under 140 minutes, from after 2010."
+        with self.client as client, patch("app.write_search_record"):
+            client.get("/", query_string={"q": query, "awards": "", "per_page": "12"})
+            first = tuple(
+                (str(item["movie"]["id"]), item["percent"], item["match_tier"])
+                for item in g.search_context["results"]
+            )
+            client.get(
+                "/", query_string={"q": "comedy under 100 minutes", "awards": "", "per_page": "12"},
+            )
+            client.get("/", query_string={"q": query, "awards": "", "per_page": "12"})
+            after_history = tuple(
+                (str(item["movie"]["id"]), item["percent"], item["match_tier"])
+                for item in g.search_context["results"]
+            )
+
+        self.assertTrue(first)
+        self.assertEqual(after_history, first)
+
+    def test_expired_budget_still_completes_hard_filtering(self):
+        def expire_before_filter(name, operation, fallback, trace=None, **kwargs):
+            if name == "filter":
+                trace.deadline = trace.started - 1
+            return _run_search_stage(name, operation, fallback, trace, **kwargs)
+
+        query = "A suspenseful mystery, not horror, under 140 minutes, from after 2010."
+        with (
+            patch("app._run_search_stage", side_effect=expire_before_filter),
+            patch("app.write_search_record"),
+        ):
+            response = self.client.get(
+                "/", query_string={"q": query, "awards": "", "per_page": "12"},
+            )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Search is busy right now. Please try again shortly.", response.data)
-        self.assertIn(b'class="search__form"', response.data)
+        self.assertIn(b'class="movie-card"', response.data)
+        self.assertNotIn(b"No movies found.", response.data)
 
     def test_explanation_exception_keeps_results_and_supplies_a_fallback_reason(self):
         with patch("app.build_match_reasons", side_effect=RuntimeError("explanation failed")):

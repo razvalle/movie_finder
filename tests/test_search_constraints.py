@@ -210,6 +210,18 @@ class RuntimeConstraintTests(unittest.TestCase):
         self.assertFalse(result["results"][0]["unverified"])
         self.assertTrue(trace.errors)
 
+    def test_completed_stage_result_is_kept_when_stage_exceeds_budget(self):
+        trace = SearchTrace("synthetic query", budget_seconds=60)
+
+        def finish_after_deadline():
+            trace.deadline = trace.started - 1
+            return ["eligible-movie"]
+
+        result = _run_search_stage("filter", finish_after_deadline, [], trace)
+
+        self.assertEqual(result, ["eligible-movie"])
+        self.assertTrue(trace.errors)
+
 
 class UnknownConstraintTests(unittest.TestCase):
     def test_load_normalization_uses_none_for_unknown_runtime_and_text(self):
